@@ -32,6 +32,7 @@ High-level implementation order, broken into small, independently-reviewable pha
 - **DoD:** two clients online → each sees the other appear/disappear live, with status text, within a second.
 
 ## Phase 3 — 1:1 DM text
+> **STATUS: COMPLETE** — Implementation complete. Automated gates green (lint, typecheck, `bun tauri build`, Convex schema deploy). Manual smokes (two-client live send/receive A↔B, reopen-DM-shows-history, typing indicator A→B, DM-list reorder by `lastMessageAt`) pending user run with a second Discord account.
 **Goal:** first usable chat — proves persisted realtime messaging.
 - 1:1 text chat backed by Convex; history persisted (forever for v1).
 - Reuses the realtime subscription pattern from Phase 2.
