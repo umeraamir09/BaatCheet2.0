@@ -189,7 +189,7 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
   }, [presence]);
 
   return (
-    <div className="flex h-screen bg-gray-950 text-white">
+    <div className="flex h-screen bg-discord-bg text-white">
       <PresenceSidebar
         presence={presence}
         collapsed={collapsed}

@@ -69,11 +69,11 @@ export function PresenceSidebar({
 
   if (collapsed) {
     return (
-      <aside className="flex h-full w-12 flex-col items-center gap-3 border-r border-gray-800 bg-gray-950 py-3">
+      <aside className="flex h-full w-12 flex-col items-center gap-3 border-r border-white/10 bg-discord-surface py-3">
         <button
           onClick={onToggleCollapse}
           title="Expand sidebar"
-          className="text-gray-400 hover:text-white"
+          className="text-white/60 hover:text-white"
         >
           <ChevronIcon direction="right" />
         </button>
@@ -87,8 +87,8 @@ export function PresenceSidebar({
             >
               <img src={p.user?.avatarUrl} alt="" className="h-8 w-8 rounded-full" />
               <span
-                className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border border-gray-950 ${
-                  p.online ? "bg-green-500" : "bg-gray-600"
+                className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-discord-surface ${
+                  p.online ? "bg-green-500" : "bg-white/30"
                 }`}
               />
             </button>
@@ -99,13 +99,13 @@ export function PresenceSidebar({
   }
 
   return (
-    <aside className="flex h-full w-64 flex-col border-r border-gray-800 bg-gray-950">
-      <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-400">BaatCheet</h2>
+    <aside className="flex h-full w-64 flex-col border-r border-white/10 bg-discord-bg">
+      <div className="flex items-center justify-between border-b border-white/8 px-3 py-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-white/60">BaatCheet</h2>
         <button
           onClick={onToggleCollapse}
           title="Collapse sidebar"
-          className="text-gray-400 hover:text-white"
+          className="text-white/60 hover:text-white"
         >
           <ChevronIcon direction="left" />
         </button>
@@ -120,8 +120,8 @@ export function PresenceSidebar({
       <div className="flex-1 overflow-y-auto">
         {/* Direct Messages (Phase 3 — smoke 4 reorderable list) */}
         {myDMs.length > 0 && (
-          <div className="border-b border-gray-800 px-1 py-1">
-            <p className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+          <div className="border-b border-white/8 px-1 py-1">
+            <p className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-white/45">
               Direct Messages
             </p>
             {myDMs.map((dm) => (
@@ -143,11 +143,11 @@ export function PresenceSidebar({
 
         {/* All friends (Phase 2 list, preserved — now DM-launchable) */}
         <div className="px-1 py-1">
-          <p className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+          <p className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-white/45">
             Friends
           </p>
           {friends.length === 0 && (
-            <p className="px-2 py-2 text-sm text-gray-500">No friends yet.</p>
+            <p className="px-2 py-2 text-sm text-white/45">No friends yet.</p>
           )}
           {friends.map((p) => (
             <PresenceRow
@@ -161,7 +161,7 @@ export function PresenceSidebar({
       </div>
 
       {/* Self + log out footer (replaces the Phase-1 main-pane logout button) */}
-      <footer className="flex items-center gap-2 border-t border-gray-800 bg-gray-950 px-2 py-2">
+      <footer className="flex items-center gap-2 border-t border-white/8 bg-discord-surface px-2 py-2">
         <img
           src={user.avatarUrl}
           alt={`${user.username} avatar`}
@@ -171,12 +171,12 @@ export function PresenceSidebar({
           <p className="truncate text-sm font-medium text-white">
             {user.displayName ?? user.username}
           </p>
-          <p className="truncate text-xs text-gray-400">@{user.username}</p>
+          <p className="truncate text-xs text-white/60">@{user.username}</p>
         </div>
         <button
           onClick={onLogout}
           title="Log out"
-          className="rounded p-1.5 text-gray-400 hover:bg-gray-800 hover:text-white"
+          className="rounded p-1.5 text-white/60 hover:bg-white/10 hover:text-white"
         >
           <LogoutIcon />
         </button>
@@ -192,8 +192,8 @@ function DMRow({ dm, active, onSelect }: { dm: DMEntry; active: boolean; onSelec
   return (
     <button
       onClick={onSelect}
-      className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-gray-900 ${
-        active ? "bg-gray-800" : ""
+      className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-discord-surface ${
+        active ? "bg-discord-surface" : ""
       }`}
     >
       <img
@@ -202,8 +202,8 @@ function DMRow({ dm, active, onSelect }: { dm: DMEntry; active: boolean; onSelec
         className="h-8 w-8 shrink-0 rounded-full"
       />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-gray-100">{name}</p>
-        {preview && <p className="truncate text-xs text-gray-500">{preview}</p>}
+        <p className="truncate text-sm font-medium text-white/90">{name}</p>
+        {preview && <p className="truncate text-xs text-white/45">{preview}</p>}
       </div>
     </button>
   );
@@ -223,27 +223,27 @@ function PresenceRow({
   return (
     <button
       onClick={onSelect}
-      className={`flex w-full items-center gap-3 rounded px-2 py-1.5 text-left hover:bg-gray-900 ${
-        active ? "bg-gray-800" : ""
+      className={`flex w-full items-center gap-3 rounded px-2 py-1.5 text-left hover:bg-discord-surface ${
+        active ? "bg-discord-surface" : ""
       }`}
     >
       <div className="relative shrink-0">
         <img src={entry.user?.avatarUrl} alt={`${name} avatar`} className="h-9 w-9 rounded-full" />
         <span
-          className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-gray-950 ${
-            entry.online ? "bg-green-500" : "bg-gray-600"
+          className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-discord-bg ${
+            entry.online ? "bg-green-500" : "bg-white/30"
           }`}
         />
       </div>
       <div className="min-w-0 flex-1">
         <p
           className={`truncate text-sm font-medium ${
-            entry.online ? "text-white" : "text-gray-500"
+            entry.online ? "text-white" : "text-white/45"
           }`}
         >
           {name}
         </p>
-        {entry.status && <p className="truncate text-xs text-gray-400">{entry.status}</p>}
+        {entry.status && <p className="truncate text-xs text-white/60">{entry.status}</p>}
       </div>
     </button>
   );
@@ -260,7 +260,7 @@ function StatusInput({
   disabled: boolean;
 }) {
   return (
-    <div className="border-b border-gray-800 px-3 py-2">
+    <div className="border-b border-white/8 px-3 py-2">
       <input
         type="text"
         value={value}
@@ -268,7 +268,7 @@ function StatusInput({
         disabled={disabled}
         maxLength={MAX_STATUS_LEN}
         placeholder={disabled ? "Connecting…" : "Set a status…"}
-        className="w-full rounded bg-gray-900 px-2 py-1.5 text-sm text-gray-100 placeholder:text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-700 disabled:opacity-50"
+        className="w-full rounded bg-discord-surface px-2 py-1.5 text-sm text-white/90 placeholder:text-white/35 focus:outline-none focus:ring-1 focus:ring-discord-blurple disabled:opacity-50"
       />
     </div>
   );

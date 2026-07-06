@@ -73,9 +73,9 @@ export function DMThread({ conversationId, myUserId, peerProfile }: DMThreadProp
       : null;
 
   return (
-    <div className="flex h-full flex-1 flex-col bg-gray-950">
+    <div className="flex h-full flex-1 flex-col bg-discord-bg">
       {/* Header */}
-      <header className="flex items-center gap-3 border-b border-gray-800 px-4 py-3">
+      <header className="flex items-center gap-3 border-b border-white/8 px-4 py-3">
         <img
           src={peerProfile?.avatarUrl}
           alt={`${peerName} avatar`}
@@ -83,7 +83,7 @@ export function DMThread({ conversationId, myUserId, peerProfile }: DMThreadProp
         />
         <div className="min-w-0">
           <p className="truncate font-semibold text-white">{peerName}</p>
-          <p className="truncate text-xs text-gray-400">@{peerProfile?.username ?? "…"}</p>
+          <p className="truncate text-xs text-white/60">@{peerProfile?.username ?? "…"}</p>
         </div>
       </header>
 
@@ -97,7 +97,7 @@ export function DMThread({ conversationId, myUserId, peerProfile }: DMThreadProp
       </div>
 
       {/* Typing indicator */}
-      <div className="h-5 px-4 text-xs text-gray-400">{typingText ?? ""}</div>
+      <div className="h-5 px-4 text-xs text-white/60">{typingText ?? ""}</div>
 
       {/* Composer */}
       <Composer
@@ -120,7 +120,7 @@ function MessageBubble({ message, mine }: { message: MessageEntry; mine: boolean
   if (mine) {
     return (
       <div className="mb-2 flex justify-end">
-        <div className="max-w-[70%] rounded-2xl rounded-br-sm bg-indigo-600 px-3 py-2 text-white">
+        <div className="max-w-[70%] rounded-2xl rounded-br-sm bg-discord-blurple px-3 py-2 text-white">
           <p className="whitespace-pre-wrap break-words text-sm">{message.body}</p>
         </div>
       </div>
@@ -134,8 +134,8 @@ function MessageBubble({ message, mine }: { message: MessageEntry; mine: boolean
         className="h-8 w-8 shrink-0 rounded-full"
       />
       <div className="max-w-[70%]">
-        <p className="mb-0.5 text-xs font-medium text-gray-300">{name}</p>
-        <div className="rounded-2xl rounded-bl-sm bg-gray-800 px-3 py-2 text-white">
+        <p className="mb-0.5 text-xs font-medium text-white/80">{name}</p>
+        <div className="rounded-2xl rounded-bl-sm bg-discord-surface px-3 py-2 text-white">
           <p className="whitespace-pre-wrap break-words text-sm">{message.body}</p>
         </div>
       </div>
@@ -147,7 +147,7 @@ function MessageBubble({ message, mine }: { message: MessageEntry; mine: boolean
 function EmptyThread() {
   return (
     <div className="flex h-full items-center justify-center">
-      <p className="text-sm text-gray-500">No messages yet. Say hi!</p>
+      <p className="text-sm text-white/45">No messages yet. Say hi!</p>
     </div>
   );
 }
@@ -167,19 +167,19 @@ function Composer({
   disabled: boolean;
 }) {
   return (
-    <div className="flex items-end gap-2 border-t border-gray-800 px-4 py-3">
+    <div className="flex items-end gap-2 border-t border-white/8 px-4 py-3">
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value.slice(0, MAX_MESSAGE_LEN))}
         onKeyDown={onKeyDown}
         placeholder="Type a message…"
         rows={1}
-        className="max-h-32 flex-1 resize-none rounded bg-gray-900 px-3 py-2 text-sm text-gray-100 placeholder:text-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-700"
+        className="max-h-32 flex-1 resize-none rounded bg-discord-surface px-3 py-2 text-sm text-white/90 placeholder:text-white/35 focus:outline-none focus:ring-1 focus:ring-discord-blurple"
       />
       <button
         onClick={onSend}
         disabled={disabled || !value.trim()}
-        className="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
+        className="rounded bg-discord-blurple px-4 py-2 text-sm font-medium text-white hover:bg-discord-blurple-hover disabled:opacity-40"
       >
         Send
       </button>
@@ -190,8 +190,8 @@ function Composer({
 /** Empty state when no DM is selected (Decision D2). */
 export function EmptyDMState() {
   return (
-    <div className="flex h-full flex-1 flex-col items-center justify-center gap-2 bg-gray-950 text-gray-400">
-      <p className="text-lg font-medium text-gray-300">No conversation selected</p>
+    <div className="flex h-full flex-1 flex-col items-center justify-center gap-2 bg-discord-bg text-white/60">
+      <p className="text-lg font-medium text-white/80">No conversation selected</p>
       <p className="text-sm">Select a friend to start chatting.</p>
     </div>
   );

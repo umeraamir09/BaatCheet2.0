@@ -30,16 +30,16 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gray-950 p-8 text-white">
+        <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-discord-bg p-8 text-white">
           <h1 className="text-2xl font-bold text-red-500">Something went wrong</h1>
-          <pre className="max-w-2xl overflow-auto rounded bg-gray-900 p-4 text-sm text-gray-300">
+          <pre className="max-w-2xl overflow-auto rounded bg-discord-surface p-4 text-sm text-white/80">
             {this.state.error?.message}
             {"\n\n"}
             {this.state.error?.stack}
           </pre>
           <button
             onClick={() => this.setState({ hasError: false, error: null })}
-            className="rounded bg-gray-800 px-4 py-2 text-sm hover:bg-gray-700"
+            className="rounded bg-discord-surface px-4 py-2 text-sm hover:bg-discord-blurple"
           >
             Try again
           </button>
