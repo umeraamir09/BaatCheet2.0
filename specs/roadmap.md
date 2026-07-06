@@ -5,6 +5,8 @@ High-level implementation order, broken into small, independently-reviewable pha
 ---
 
 ## Phase 0 — Scaffold
+> **STATUS: COMPLETE** — Committed and pushed to `main` (commit f044be2).
+
 **Goal:** empty-but-wired app shell and prereqs in place before any feature.
 - Tauri + Vite + React + TS + Tailwind bootstrapped and running locally.
 - Convex client wired to the self-hosted instance; a trivial reactive query proves the connection.
@@ -13,6 +15,8 @@ High-level implementation order, broken into small, independently-reviewable pha
 - **DoD:** `cargo tauri dev` launches a window showing a live Convex query result. No features yet.
 
 ## Phase 1 — Auth (Discord OAuth2 + PKCE)
+> **STATUS: COMPLETE** — Implementation complete. Manual smoke tests pending (see `specs/2026-07-06-auth-discord-oauth2-pkce/validation.md`).
+
 **Goal:** trickiest infra piece validated before any UI — the README's call to do this first.
 - PKCE flow in the bare shell: open system browser → Discord consent → redirect back via `baatcheet://callback`.
 - Pull username, global display name, avatar from `/users/@me` on first login.
