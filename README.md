@@ -98,6 +98,27 @@ Phase 2 proves the realtime data layer and gives the first sign of "who's around
 2. Crash-disconnect → offline within ~30–35s (TTL sweep path)
 3. Status set on A → visible on B live; log-out flips offline and stops the heartbeat
 
+## 3.3 Phase 3 — 1:1 DM text
+
+Phase 3 is the first usable chat: a 1:1 text conversation between two friends backed by Convex — messages sent from client A appear on client B live (no refresh, no polling), and reopening the DM shows full history. It lands the 2-pane app shell (friends/DM sidebar | DM thread) that Phase 5 retargets at the group lobby.
+
+**Implementation details:**
+
+- **Generic `conversations` + `messages` tables (Decision D1):** a `conversations` doc carries `type` (`"dm"` now; `"group"` lands Phase 5), `participantIds` (exactly 2 for a DM, stored sorted), and a canonical sorted `key` (`"userIdA__userIdB"`) so both participants resolve to the **same** conversation doc via a single upsert/lookup path (index `byKey`). A separate `messages` table is keyed by `conversationId` + ordered by `createdAt` (index `byConversation`). Phase 5's group lobby is a `type:"group"` doc reusing the same `messages` table — a UI retarget, not a schema migration.
+- **DM lifecycle:** clicking a friend in the sidebar calls `getOrCreateDM(myUserId, peerUserId)` (computes the canonical `key`, inserts if missing, returns the `_id`) and swaps the main pane to that DM thread. The sidebar gains a reorderable "Direct Messages" section (`listMyDMs`, sorted by `lastMessageAt` desc, with last-message preview) above the Phase-2 friends list (which is preserved and now DM-launchable).
+- **Sending + history:** `sendMessage(conversationId, senderId, body)` inserts a `messages` doc AND patches `conversations.lastMessageAt` in one transaction (so the DM list reorders live). History is a single reactive `listMessages(conversationId)` subscription returning the **full** ordered history — no pagination, no lazy-loading in v1 (Decision D5 — YAGNI for a ≤10-person group; revisit only if subscription size becomes a problem). Messages persist forever for v1.
+- **Typing indicators (Decision D3):** a `typing` table (`conversationId`, `userId`, `lastTyped`) + a `setTyping` mutation (debounced ~300ms client-side, not per keystroke) + a recency-filtered `listTyping` query (`lastTyped > now - 3000`, self-excluded). The DM thread shows "… is typing" for the peer. Stale docs are invisible by recency — **no cron** is required for v1 (the table stays tiny; a sweep can be added if it grows).
+- **2-pane app shell (Decision D2):** the Phase-2 collapsible sidebar becomes DM-selectable; the main pane swaps from the Phase-1 post-auth placeholder to the active DM thread (or an empty state). There is **no narrow icon rail** — in Phase 3 there is only one place to chat (1:1 DMs), so a DM-vs-group switcher has nothing to switch between; the icon rail defers to Phase 5 when the group lobby becomes the second surface. The last-opened DM persists across relaunch via localStorage (a UI pref — an id, not a credential) and is cleared on logout.
+- **Message UI:** a composer (textarea + Send button; Enter sends, Shift+Enter newline) at the bottom; a scrollable message list above with bubbles (own right-aligned, peer left-aligned with avatar + name); auto-scroll to bottom on new message and on conversation switch. Light Tailwind styling only (Phase 7 owns the polished Discord-derived theme).
+- **Public mutations (known v1 limitation — Decision D4):** `sendMessage`, `setTyping`, and `getOrCreateDM` are public (no Convex auth middleware), keyed by `conversationId`/`userId`/`senderId`. A misbehaving client could spoof another user's messages or typing. Acceptable for v1 (≤10 trusted friends, Convex Cloud dev backend); hardening (Convex auth or signed writes) is deferred. Inherits Phase 1 D-impl-3 / Phase 2 D7.
+
+**Manual smoke tests (see `specs/2026-07-06-dm-text/validation.md`):**
+
+1. Send A→B live + B→A live (the Phase-3 DoD, first half) — messages propagate in both directions within ~1s, no manual refresh, both clients resolve to the same `conversations` doc
+2. Reopening the DM shows full history (the Phase-3 DoD, second half) — full history restored on DM reopen and on app relaunch; no truncation (no pagination in v1)
+3. Typing indicator A→B live — appears within ~1s, disappears ~3s after the peer stops typing (recency filter, no cron)
+4. DM list reorders by `lastMessageAt` + sidebar selection round-trips — a new message reorders the sender's DM to the top live; the last selection persists across relaunch
+
 ## 4. Suggested build order
 
 1. **Auth first.** Get Discord OAuth2 + PKCE working end-to-end in a bare Tauri shell — this validates the trickiest infra piece (custom URI redirect handling) before any UI exists.
