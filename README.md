@@ -77,6 +77,27 @@ Phase 1 implements the Discord OAuth2 + PKCE authentication flow. This validates
 3. Token near expiry triggers silent refresh
 4. Log out clears session cleanly
 
+## 3.2 Phase 2 — Presence
+
+Phase 2 proves the realtime data layer and gives the first sign of "who's around": each online client maintains a live presence doc in Convex; everyone else sees appear/disappear + status text in a collapsible sidebar, with no refresh and no polling.
+
+**Implementation details:**
+
+- **`presence` table (separate from `users`):** A new Convex `presence` table keyed by `userId` (FK to `users`) + denormalized `discordId`. Keeping presence separate avoids thrashing the rarely-changing `users` profile doc with ~10s heartbeat writes. Indexes: `byUser`, `byDiscordId`.
+- **Binary Online/Offline + self-set status:** `online: boolean` + `status: string` (free-text "now playing"/custom line). No Idle/DND in v1. Status persists across log out (only `online` flips), so the user doesn't retype on next login. Status is self-set in BaatCheet — Discord's `identify` scope can't read rich presence.
+- **Heartbeat + TTL sweep (crash-resilient offline detection):** The client writes `lastSeen` every ~10s. A Convex cron `sweepOffline` runs every ~5s and flips any presence doc whose `lastSeen` is older than 30s to `online:false`. Graceful close (window close / log out) sets `online:false` immediately. Result: online appears within ~1s (reactive subscription); crash-disconnect resolves within ~30–35s (30s staleness + up to 5s until next sweep).
+- **Reactive presence list (no polling, no manual websocket):** The sidebar subscribes to a live `listPresence` query (joined with `users` profile). Appear/disappear and status edits propagate automatically via Convex reactive subscriptions.
+- **Collapsible friends sidebar:** Left rail listing every `users` doc (one pre-existing friend group — no friend-request flow). Entries grouped online-first (alpha by displayName, fallback username), then offline. Each row shows avatar, name, status text, and an online/offline dot. Collapsible to a narrow icon rail; collapse state persists across relaunch via localStorage (a UI pref, not a credential). The sidebar is the only new chrome — the main area stays the Phase-1 post-auth screen.
+- **Graceful close:** A Tauri `onCloseRequested` listener fires `setOffline` before the window closes (best-effort, 2s timeout). The TTL sweep is the backstop if the mutation doesn't land in time.
+- **Log-out teardown:** The log-out path now stops the heartbeat + calls `setOffline` before clearing tokens. The `usePresence` unmount cleanup is the backstop for Rust-initiated teardown (refresh-failure → `discord:needs-login`).
+- **Public mutations (known v1 limitation):** Presence mutations are public (no Convex auth middleware), keyed by `userId`/`discordId`. A misbehaving client could spoof another user's presence. Acceptable for v1 (≤10 trusted friends, Convex Cloud dev backend); hardening (Convex auth or signed writes) is deferred.
+
+**Manual smoke tests (see `specs/2026-07-06-presence/validation.md`):**
+
+1. Two clients see each other appear/disappear live, with status, within ~1s (the Phase-2 DoD)
+2. Crash-disconnect → offline within ~30–35s (TTL sweep path)
+3. Status set on A → visible on B live; log-out flips offline and stops the heartbeat
+
 ## 4. Suggested build order
 
 1. **Auth first.** Get Discord OAuth2 + PKCE working end-to-end in a bare Tauri shell — this validates the trickiest infra piece (custom URI redirect handling) before any UI exists.

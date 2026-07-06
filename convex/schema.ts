@@ -12,4 +12,16 @@ export default defineSchema({
     avatarUrl: v.string(),
     updatedAt: v.number(),
   }).index("byDiscordId", ["discordId"]),
+  // Phase 2 — Presence (Decision D1). Separate table to avoid thrashing the
+  // rarely-changing users doc with ~10s heartbeat writes. Keyed by userId
+  // (FK to users) + denormalized discordId for client-side self-matching.
+  presence: defineTable({
+    userId: v.id("users"),
+    discordId: v.string(),
+    status: v.string(), // free-text, self-set (D2). "" if none. Persists across sessions.
+    online: v.boolean(), // binary Online/Offline (D2). Idle/DND deferred.
+    lastSeen: v.number(), // ms epoch — heartbeat timestamp
+  })
+    .index("byUser", ["userId"])
+    .index("byDiscordId", ["discordId"]),
 });
