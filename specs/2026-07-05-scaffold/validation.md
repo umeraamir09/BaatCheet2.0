@@ -1,5 +1,7 @@
 # Phase 0 — Scaffold: Validation
 
+> **STATUS: COMPLETE** — Committed and pushed to `main` (commit f044be2).
+
 How to know the implementation succeeded and can be merged. Per Decision D5, merge requires **automated gates green AND a manual smoke test**.
 
 ## Automated gates (must all pass)
