@@ -50,6 +50,33 @@ This is the feature that shapes every other decision below: the app must sit idl
 | Native notifications | **Tauri's notification API** | Incoming call / DM alerts without a heavyweight in-app toast system. |
 | Updates | **Tauri's built-in updater** | Ship patches without asking friends to manually redownload. |
 
+## 3.1 Phase 1 — Auth (Discord OAuth2 + PKCE)
+
+Phase 1 implements the Discord OAuth2 + PKCE authentication flow. This validates the trickiest infra piece (custom URI redirect handling) before any feature work begins.
+
+**Implementation details:**
+
+- **PKCE flow end-to-end:** App generates a code verifier + challenge (S256), opens the system browser to Discord's `/oauth2/authorize` with `redirect_uri=baatcheet://callback`, `response_type=code`, `scope=identify`. After Discord consent, the browser redirects to `baatcheet://callback?code=...`; the Tauri deep-link plugin captures it.
+- **Token exchange:** App exchanges the auth code + verifier for an access/refresh token pair at Discord's `/oauth2/token`. No client secret (PKCE public client).
+- **Profile fetch:** On first login, call `GET /users/@me` and pull id, username, global display name, avatar hash → derive avatar URL.
+- **Session persistence:** Refresh token, access token, and `expires_at` persisted in the OS keychain (Windows Credential Manager / macOS Keychain / Linux Secret Service) via the `keyring` crate. Never plaintext on disk, never in localStorage.
+- **Session restore on cold start:** If a valid refresh token exists, restore the session silently (no browser step, no re-consent). Only fall back to "Continue with Discord" if no token or refresh fails.
+- **Silent background refresh:** Proactive timer scheduled shortly before the access token's `expires_at` (60s margin). On any Discord API 401, refresh once and retry the request. If refresh itself fails (revoked/401), clear the session and fall back to login.
+- **Convex `users` table:** User profile persisted to a Convex `users` table on first login (Discord id as the natural key). Updated on subsequent logins if any field changed. Public mutation (no Convex auth in Phase 1).
+- **Log out:** Clears the stored refresh token + access token from keychain; returns to the "Continue with Discord" screen. Does NOT call Discord's `/oauth2/revoke` endpoint (out of scope for v1).
+
+**Dev-only commands (debug builds only):**
+
+- `dev_set_expires_in(seconds)` — set a short expiry for testing the proactive refresh timer
+- `dev_corrupt_refresh()` — corrupt the refresh token to test the refresh failure path
+
+**Manual smoke tests (see `specs/2026-07-06-auth-discord-oauth2-pkce/validation.md`):**
+
+1. Cold-start login with avatar
+2. Kill + reopen restores session without re-consent
+3. Token near expiry triggers silent refresh
+4. Log out clears session cleanly
+
 ## 4. Suggested build order
 
 1. **Auth first.** Get Discord OAuth2 + PKCE working end-to-end in a bare Tauri shell — this validates the trickiest infra piece (custom URI redirect handling) before any UI exists.

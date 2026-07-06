@@ -1,12 +1,9 @@
-import { useQuery, useMutation } from "convex/react";
-import { api } from "../convex/_generated/api";
+import { useAuth } from "./hooks/useAuth";
 
 function App() {
-  const counter = useQuery(api.counter.get);
-  const setCounter = useMutation(api.counter.set);
-  const seedCounter = useMutation(api.counter.seed);
+  const { status, user, error, login, logout } = useAuth();
 
-  if (counter === undefined) {
+  if (status === "loading") {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <p className="text-lg">Loading…</p>
@@ -14,36 +11,43 @@ function App() {
     );
   }
 
-  if (counter === null) {
-    seedCounter();
+  if (status === "success" && user) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <p className="text-lg">Initializing…</p>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-6">
+        <h1 className="text-4xl font-bold">BaatCheet</h1>
+        <img
+          src={user.avatarUrl}
+          alt={`${user.username} avatar`}
+          className="h-24 w-24 rounded-full"
+        />
+        <div className="text-center">
+          <p className="text-xl font-semibold">{user.displayName ?? user.username}</p>
+          <p className="text-sm text-gray-400">@{user.username}</p>
+        </div>
+        <p className="text-sm text-green-500">Logged in successfully</p>
+        <button onClick={logout} className="text-sm text-gray-400 hover:text-white">
+          Log out
+        </button>
       </div>
     );
   }
 
+  const statusText = {
+    idle: "Continue with Discord",
+    starting: "Opening browser…",
+    "waiting-callback": "Waiting for Discord consent…",
+    rejected: "Login rejected",
+    failed: "Login failed",
+    success: "Logged in",
+  }[status];
+
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-8">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-6">
       <h1 className="text-4xl font-bold">BaatCheet</h1>
-      <div className="text-6xl font-mono">{counter.value}</div>
-      <div className="flex gap-4">
-        <button
-          onClick={() => setCounter({ value: counter.value - 1 })}
-          className="rounded bg-gray-700 px-6 py-3 text-lg hover:bg-gray-600"
-        >
-          −
-        </button>
-        <button
-          onClick={() => setCounter({ value: counter.value + 1 })}
-          className="rounded bg-gray-700 px-6 py-3 text-lg hover:bg-gray-600"
-        >
-          +
-        </button>
-      </div>
-      <p className="text-sm text-gray-400">
-        Edit this value from the Convex dashboard to test reactivity
-      </p>
+      <button onClick={login} disabled={status === "starting" || status === "waiting-callback"}>
+        {statusText}
+      </button>
+      {error && <p className="text-sm text-red-500">{error}</p>}
     </div>
   );
 }
