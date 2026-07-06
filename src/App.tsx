@@ -1,7 +1,10 @@
 import { useAuth } from "./hooks/useAuth";
+import { AuthenticatedLayout } from "./components/AuthenticatedLayout";
 
 function App() {
   const { status, user, error, login, logout } = useAuth();
+
+  console.log("[App] render — status:", status, "user:", user ? { id: user.id, username: user.username } : null, "error:", error);
 
   if (status === "loading") {
     return (
@@ -12,24 +15,8 @@ function App() {
   }
 
   if (status === "success" && user) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-6">
-        <h1 className="text-4xl font-bold">BaatCheet</h1>
-        <img
-          src={user.avatarUrl}
-          alt={`${user.username} avatar`}
-          className="h-24 w-24 rounded-full"
-        />
-        <div className="text-center">
-          <p className="text-xl font-semibold">{user.displayName ?? user.username}</p>
-          <p className="text-sm text-gray-400">@{user.username}</p>
-        </div>
-        <p className="text-sm text-green-500">Logged in successfully</p>
-        <button onClick={logout} className="text-sm text-gray-400 hover:text-white">
-          Log out
-        </button>
-      </div>
-    );
+    console.log("[App] rendering AuthenticatedLayout for user:", user.id);
+    return <AuthenticatedLayout user={user} onLogout={logout} />;
   }
 
   const statusText = {

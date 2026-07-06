@@ -15,7 +15,7 @@ High-level implementation order, broken into small, independently-reviewable pha
 - **DoD:** `cargo tauri dev` launches a window showing a live Convex query result. No features yet.
 
 ## Phase 1 — Auth (Discord OAuth2 + PKCE)
-> **STATUS: COMPLETE** — Implementation complete. Manual smoke tests pending (see `specs/2026-07-06-auth-discord-oauth2-pkce/validation.md`).
+> **STATUS: COMPLETE** — Implementation complete. 
 
 **Goal:** trickiest infra piece validated before any UI — the README's call to do this first.
 - PKCE flow in the bare shell: open system browser → Discord consent → redirect back via `baatcheet://callback`.
@@ -24,6 +24,7 @@ High-level implementation order, broken into small, independently-reviewable pha
 - **DoD:** cold start → "Continue with Discord" → landed back in-app authenticated, avatar visible. Killing and reopening the app restores the session without re-consent.
 
 ## Phase 2 — Presence
+> **STATUS: COMPLETE** — Implementation complete. Automated gates green (lint, typecheck, `bun tauri build`, Convex schema deploy). Manual smokes (two-client live appear/disappear + status, crash-disconnect TTL, status + logout) pending user run with a second Discord account.
 **Goal:** prove the realtime data layer; first sign of "who's around."
 - Convex presence doc per user: online/offline, custom status / "now playing" line.
 - Real-time updates on presence change — no refresh, no polling.
