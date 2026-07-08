@@ -2,7 +2,7 @@
 
 **Stack:** Tauri 2 (Rust) + React 19 / TypeScript / Vite 7 SPA + Tailwind 4 + Convex 1.42 + bun
 
-**Status:** Phase 0 (scaffold) and Phase 1 (Discord OAuth2 + PKCE auth) complete. No CI, no test framework, no frontend tests.
+**Status:** Phase 0 (scaffold), Phase 1 (Discord OAuth2 + PKCE auth), Phase 2 (Presence), Phase 3 (1:1 DM text), and Phase 4 (1:1 voice — direct WebRTC) complete. No CI, no test framework, no frontend tests.
 
 ## Commands
 

@@ -39,6 +39,7 @@ High-level implementation order, broken into small, independently-reviewable pha
 - **DoD:** send a message from client A → appears on client B live; reopening the DM shows full history.
 
 ## Phase 4 — 1:1 voice (direct WebRTC)
+> **STATUS: COMPLETE** — Implementation complete. Automated gates green (lint, typecheck, `bun tauri build`, Convex schema deploy). Manual smokes (two-client live call A→B with toast + accept + two-way audio, mute/deafen round-trip, either-side leave, reject path, busy/offline handling, coturn TURN fallback across NAT) pending user run with a second Discord account.
 **Goal:** smaller surface area than group voice — good place to learn the WebRTC API.
 - Peer-to-peer WebRTC call between two friends; coturn as TURN fallback.
 - Call UI: incoming call toast, accept/decline, mute, deafen, leave.

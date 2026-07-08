@@ -4,8 +4,11 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import { usePresence } from "../hooks/usePresence";
+import { useCall } from "../hooks/useCall";
 import { PresenceSidebar } from "./PresenceSidebar";
 import { DMThread, EmptyDMState, type PeerProfile } from "./DMThread";
+import { IncomingCallToast } from "./call/IncomingCallToast";
+import { CallControls } from "./call/CallControls";
 import type { User } from "../auth";
 
 const SIDEBAR_COLLAPSED_KEY = "baatcheet.sidebar.collapsed";
@@ -31,7 +34,11 @@ interface AuthenticatedLayoutProps {
  */
 export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps) {
   const presence = usePresence(user.id);
+  const call = useCall(presence.userId);
   const getOrCreateDM = useMutation(api.conversations.getOrCreateDM);
+
+  // Reactive presence list — used to check if the active peer is online (Phase 4 D11).
+  const presenceListRaw = useQuery(api.presence.listPresence, {});
 
   // Reactive DM list — used for the active-peer profile + restore validation.
   // Deduped with PresenceSidebar's own `listMyDMs` subscription by the Convex
@@ -112,6 +119,27 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
     return dm?.peerUserId ?? null;
   }, [activePeerUserId, myDMsQuery, effectiveConversationId]);
 
+  // Phase 4 — Check if the active peer is online (Decision D11).
+  const peerOnline = useMemo(() => {
+    if (!effectivePeerUserId) return false;
+    const list = presenceListRaw ?? [];
+    const peerPresence = list.find((p) => p.userId === effectivePeerUserId);
+    return peerPresence?.online ?? false;
+  }, [effectivePeerUserId, presenceListRaw]);
+
+  // Phase 4 — Check if a call is active with the current peer.
+  const callActiveWithPeer = useMemo(() => {
+    return call.status !== "idle" && call.status !== "ended" && call.peerUserId === effectivePeerUserId;
+  }, [call.status, call.peerUserId, effectivePeerUserId]);
+
+  // Phase 4 — Start a call with the active peer (Decision D12).
+  const startCallWithPeer = useCallback(
+    (peerUserId: Id<"users">, peerProfile: PeerProfile) => {
+      call.startCall(peerUserId, peerProfile);
+    },
+    [call],
+  );
+
   // Click a friend row → open/create the DM.
   const selectPeer = useCallback(
     async (peerUserId: Id<"users">, peerProfile: PeerProfile | null) => {
@@ -157,9 +185,14 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
     [],
   );
 
-  // Logout: stop heartbeat + setOffline BEFORE clearing tokens; clear the DM
-  // pref so a different user doesn't land on the previous user's thread.
+  // Logout: end any active call FIRST (Phase 4 teardown ordering), then stop
+  // heartbeat + setOffline BEFORE clearing tokens; clear the DM pref so a
+  // different user doesn't land on the previous user's thread.
   const handleLogout = useCallback(async () => {
+    // Phase 4 — End any active call before going offline.
+    if (call.status !== "idle" && call.status !== "ended") {
+      await call.leave("left");
+    }
     await presence.goOffline();
     try {
       localStorage.removeItem(ACTIVE_DM_KEY);
@@ -167,18 +200,23 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       // non-fatal
     }
     await onLogout();
-  }, [presence, onLogout]);
+  }, [call, presence, onLogout]);
 
-  // Tauri window close-requested → fire goOffline before destroying the
-  // window. Backstop: the TTL sweep (30–35s) if the mutation doesn't land.
+  // Tauri window close-requested → end any active call FIRST (Phase 4 teardown
+  // ordering), then fire goOffline before destroying the window. Backstop: the
+  // TTL sweep (30–35s) if the mutation doesn't land.
   useEffect(() => {
     const win = getCurrentWindow();
     const unlistenP = win.onCloseRequested(async (event) => {
       event.preventDefault();
       try {
+        // Phase 4 — End any active call before going offline.
+        if (call.status !== "idle" && call.status !== "ended") {
+          await call.leave("left");
+        }
         await presence.goOffline();
       } catch (e) {
-        console.error("window close goOffline failed:", e);
+        console.error("window close teardown failed:", e);
       } finally {
         await win.destroy();
       }
@@ -186,7 +224,7 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
     return () => {
       unlistenP.then((fn) => fn()).catch(() => {});
     };
-  }, [presence]);
+  }, [call, presence]);
 
   return (
     <div className="flex h-screen bg-discord-bg text-white">
@@ -207,11 +245,38 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
             conversationId={effectiveConversationId}
             myUserId={presence.userId}
             peerProfile={activePeerProfile}
+            peerUserId={effectivePeerUserId}
+            peerOnline={peerOnline}
+            startCallWithPeer={startCallWithPeer}
+            callActiveWithPeer={callActiveWithPeer}
           />
         ) : (
           <EmptyDMState />
         )}
       </main>
+
+      {/* Phase 4 — Incoming call toast (Decision D6, D12) */}
+      {call.incomingCall && (
+        <IncomingCallToast
+          caller={call.incomingCall.caller}
+          onAccept={call.accept}
+          onDecline={call.reject}
+        />
+      )}
+
+      {/* Phase 4 — Floating call controls (Decision D12) */}
+      {call.status !== "idle" && call.status !== "ended" && (
+        <CallControls
+          status={call.status}
+          peerProfile={call.peerProfile}
+          muted={call.muted}
+          deafened={call.deafened}
+          onMute={call.setMuted}
+          onDeafen={call.setDeafened}
+          onLeave={() => call.leave("left")}
+          audioRef={call.audioRef}
+        />
+      )}
     </div>
   );
 }

@@ -18,6 +18,10 @@ interface DMThreadProps {
   conversationId: Id<"conversations">;
   myUserId: Id<"users">;
   peerProfile: PeerProfile | null;
+  peerUserId: Id<"users"> | null;
+  peerOnline: boolean;
+  startCallWithPeer: (peerUserId: Id<"users">, peerProfile: PeerProfile) => void;
+  callActiveWithPeer: boolean;
 }
 
 const MAX_MESSAGE_LEN = 4000;
@@ -32,7 +36,15 @@ const MAX_MESSAGE_LEN = 4000;
  * Composer: Enter sends, Shift+Enter newline; `setTyping` debounced in the
  * hook (~300ms). Light Tailwind styling only (Phase 7 owns the theme).
  */
-export function DMThread({ conversationId, myUserId, peerProfile }: DMThreadProps) {
+export function DMThread({
+  conversationId,
+  myUserId,
+  peerProfile,
+  peerUserId,
+  peerOnline,
+  startCallWithPeer,
+  callActiveWithPeer,
+}: DMThreadProps) {
   const { messages, typingPeers, send, notifyTyping } = useDMThread(conversationId, myUserId);
 
   const [input, setInput] = useState("");
@@ -81,10 +93,21 @@ export function DMThread({ conversationId, myUserId, peerProfile }: DMThreadProp
           alt={`${peerName} avatar`}
           className="h-8 w-8 rounded-full"
         />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate font-semibold text-white">{peerName}</p>
           <p className="truncate text-xs text-white/60">@{peerProfile?.username ?? "…"}</p>
         </div>
+        {/* Phase 4 — Call button (Decision D11: disabled if peer offline or call active) */}
+        {peerUserId && peerProfile && (
+          <button
+            onClick={() => startCallWithPeer(peerUserId, peerProfile)}
+            disabled={!peerOnline || callActiveWithPeer}
+            className="rounded bg-discord-blurple p-2 text-white hover:bg-discord-blurple-hover disabled:cursor-not-allowed disabled:opacity-40"
+            title={!peerOnline ? "Peer is offline" : callActiveWithPeer ? "Call in progress" : "Start voice call"}
+          >
+            <PhoneIcon />
+          </button>
+        )}
       </header>
 
       {/* Message list */}
@@ -184,6 +207,15 @@ function Composer({
         Send
       </button>
     </div>
+  );
+}
+
+/** Phone icon for the call button (Phase 4). */
+function PhoneIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+    </svg>
   );
 }
 

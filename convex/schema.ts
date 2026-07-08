@@ -50,4 +50,24 @@ export default defineSchema({
     userId: v.id("users"),
     lastTyped: v.number(),
   }).index("byConversation", ["conversationId"]),
+  // Phase 4 — 1:1 voice (Decisions D1, D3). A `calls` doc is the single
+  // source of truth for call state — both sides subscribe via `getCall(callId)`.
+  // Signaling (SDP offer/answer + trickled ICE) flows through Convex (D1).
+  // Status transitions are idempotent (guard on current status) so concurrent
+  // ends from both sides don't double-transition.
+  calls: defineTable({
+    callerId: v.id("users"),
+    calleeId: v.id("users"),
+    status: v.string(), // "calling" | "accepted" | "rejected" | "ended" | "missed"
+    offerSdp: v.string(),
+    answerSdp: v.union(v.string(), v.null()),
+    callerIceCandidates: v.array(v.string()), // JSON-encoded RTCIceCandidateInit
+    calleeIceCandidates: v.array(v.string()),
+    startedAt: v.number(),
+    connectedAt: v.union(v.number(), v.null()),
+    endedAt: v.union(v.number(), v.null()),
+    endReason: v.union(v.string(), v.null()),
+  })
+    .index("byCallee", ["calleeId", "startedAt"]) // incoming-call toast subscription
+    .index("byCaller", ["callerId", "startedAt"]),
 });

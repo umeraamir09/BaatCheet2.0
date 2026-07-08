@@ -119,6 +119,31 @@ Phase 3 is the first usable chat: a 1:1 text conversation between two friends ba
 3. Typing indicator A→B live — appears within ~1s, disappears ~3s after the peer stops typing (recency filter, no cron)
 4. DM list reorders by `lastMessageAt` + sidebar selection round-trips — a new message reorders the sender's DM to the top live; the last selection persists across relaunch
 
+## 3.4 Phase 4 — 1:1 voice (direct WebRTC)
+
+Phase 4 is the first voice: prove direct peer-to-peer WebRTC audio between two friends, with coturn as TURN fallback. A calls B from the DM thread → B sees an incoming-call toast → B accepts → two-way audio works → either side can mute/deafen/leave cleanly. The roadmap calls this "smaller surface area than group voice — good place to learn the WebRTC API," so Phase 4 uses the raw WebRTC API directly (no SFU, no wrapper library); the LiveKit SFU for group voice is Phase 6.
+
+**Implementation details:**
+
+- **`calls` table in Convex (Decision D3):** a `calls` doc carries `callerId`, `calleeId`, `status` (`"calling"` | `"accepted"` | `"rejected"` | `"ended"` | `"missed"`), `offerSdp`, `answerSdp` (nullable), `callerIceCandidates`/`calleeIceCandidates` (JSON-encoded `RTCIceCandidateInit` arrays), `startedAt`, `connectedAt`, `endedAt`, `endReason`. Indexed by `byCallee` (incoming-call toast subscription) and `byCaller`. Both sides subscribe to the single call doc via `getCall(callId)` for state transitions + ICE trickle.
+- **Signaling over Convex (Decision D1):** exchange the SDP offer/answer + trickled ICE candidates via Convex docs that both sides subscribe to — reusing the Phase-2/3 reactive subscription + public-mutation pattern. No new WebSocket infra; signaling state lives in the `calls` doc.
+- **Raw WebRTC layer (Decision D4):** a thin in-repo wrapper (`src/webrtc/peerConnection.ts`) over the browser `RTCPeerConnection` — no `simple-peer`/`peerjs` dependency. Handles `onicecandidate` → `addIceCandidate` mutation, `ontrack` → remote `<audio>` element, `createOffer`/`createAnswer`/`setLocalDescription`/`setRemoteDescription`/`addIceCandidate`, `close`. ICE servers config read from `VITE_ICE_SERVERS` (Vite-embedded JSON of `RTCIceServer[]`) — STUN + coturn TURN (Decision D2).
+- **coturn provisioning (Decision D2):** a single self-hosted coturn on the Coolify VM, shared with Phase 6 (group voice + LiveKit fallback). Static long-term-mechanism credentials for v1 (Decision D5). The ICE servers JSON is provided to the frontend via `VITE_ICE_SERVERS` (env, not in the repo).
+- **Call UI (Decision D12):** a call button (phone icon) in the DM thread header — clicking it starts a 1:1 voice call with the DM peer. The call button is disabled when the peer is offline (Decision D11). The incoming-call toast + floating call controls are rendered by `AuthenticatedLayout` (independent of the active DM, so the user can browse DMs mid-call). Mute = local audio track `enabled = false`; deafen = remote audio element muted AND local track muted (Discord semantics).
+- **Busy + offline handling (Decision D11):** call button is disabled when the peer's `presence.online === false`. If an incoming call arrives while the callee is already in a call, the callee's client auto-rejects (no toast shown) so the caller gets a fast busy signal.
+- **Public mutations (known v1 limitation — Decision D7):** `startCall`, `answerCall`, `rejectCall`, `endCall`, `addIceCandidate`, `markMissed` are all public (no Convex auth middleware), keyed by `callerId`/`calleeId`/`callId`. A misbehaving client could spoof a call, hijack another user's call doc, or inject ICE candidates. Acceptable for v1 (≤10 trusted friends, Convex dev backend); hardening deferred.
+- **Platform scope (Decision D9):** Phase 4 is validated on Windows (WebView2) only. No macOS `NSMicrophoneUsageDescription` or Linux WebKitGTK permission handling is wired. Cross-platform mic hardening defers.
+- **Deferred:** OS notifications for incoming calls (Decision D6 — in-app toast is the DoD surface), video, screen share, call recording, call history UI, time-limited coturn credentials, call quality stats.
+
+**Manual smoke tests (see `specs/2026-07-07-voice-1-1/validation.md`):**
+
+1. A calls B → B sees toast → accept → two-way audio (the Phase-4 DoD, first half) — A→B call reaches two-way audio within a few seconds of Accept; the toast → controls transition is live on both sides
+2. Mute / deafen round-trip (the Phase-4 DoD, second half) — mute and deafen toggle cleanly on both sides with the correct speaker/mic semantics; the UI state reflects the toggles
+3. Either side leaves cleanly (the Phase-4 DoD, third half) — either side can leave; both clients tear down cleanly (UI removed, tracks stopped, mic indicator cleared); a subsequent call works
+4. Reject path — the reject path tears down both sides cleanly without ever establishing a peer connection; the `calls` doc records the rejection
+5. Busy + offline callee handling — call button is disabled when peer offline; incoming call while in-call is auto-rejected (no toast), giving the caller a fast busy signal
+6. coturn TURN fallback across NAT (conditional — requires a strict-NAT test client) — the call connects via a TURN `relay` candidate on a strict-NAT network; two-way audio works
+
 ## 4. Suggested build order
 
 1. **Auth first.** Get Discord OAuth2 + PKCE working end-to-end in a bare Tauri shell — this validates the trickiest infra piece (custom URI redirect handling) before any UI exists.
