@@ -1,5 +1,5 @@
 /**
- * WebRTC and Convex mocks for testing useCall hook.
+ * WebRTC, Convex, and LiveKit mocks for testing useCall and useGroupVoice hooks.
  */
 import { vi } from "vitest";
 
@@ -46,10 +46,12 @@ export function setupWebRTCMocks() {
     configurable: true,
   });
 
-  // Mock RTCPeerConnection
+  // Mock RTCPeerConnection — use regular function so `new` works
   vi.stubGlobal(
     "RTCPeerConnection",
-    vi.fn(() => mockPeerConnection),
+    vi.fn(function () {
+      return mockPeerConnection;
+    }),
   );
 }
 
@@ -68,4 +70,78 @@ export function resetWebRTCMocks() {
   mockPeerConnection.oniceconnectionstatechange = null;
   mockPeerConnection.onicegatheringstatechange = null;
   mockPeerConnection.onsignalingstatechange = null;
+}
+
+// ============================================================================
+// LiveKit mocks for useGroupVoice
+// ============================================================================
+
+export const mockLocalParticipant = {
+  identity: "user-1",
+  name: "User One",
+  metadata: JSON.stringify({ avatarUrl: "", displayName: "User One", username: "user1" }),
+  isMicrophoneEnabled: true,
+  setMicrophoneEnabled: vi.fn().mockResolvedValue(undefined),
+};
+
+export const mockRemoteParticipant = {
+  identity: "user-2",
+  name: "User Two",
+  metadata: JSON.stringify({ avatarUrl: "", displayName: "User Two", username: "user2" }),
+  isMicrophoneEnabled: true,
+  isSpeaking: false,
+};
+
+export const mockRemoteTrack = {
+  kind: "audio",
+  attach: vi.fn().mockReturnValue({
+    autoplay: false,
+    remove: vi.fn(),
+  }),
+  detach: vi.fn().mockReturnValue([]),
+};
+
+export const mockRoom = {
+  connect: vi.fn().mockResolvedValue(undefined),
+  disconnect: vi.fn().mockResolvedValue(undefined),
+  removeAllListeners: vi.fn(),
+  localParticipant: mockLocalParticipant,
+  remoteParticipants: new Map(),
+  canPlaybackAudio: true,
+  startAudio: vi.fn().mockResolvedValue(undefined),
+  on: vi.fn().mockReturnThis(),
+  off: vi.fn().mockReturnThis(),
+};
+
+export const MockRoomClass = vi.fn(() => mockRoom);
+
+export function setupLiveKitMocks() {
+  vi.mock("livekit-client", () => ({
+    Room: MockRoomClass,
+    RoomEvent: {
+      ParticipantConnected: "participantConnected",
+      ParticipantDisconnected: "participantDisconnected",
+      ParticipantMetadataChanged: "participantMetadataChanged",
+      TrackSubscribed: "trackSubscribed",
+      TrackUnsubscribed: "trackUnsubscribed",
+      TrackMuted: "trackMuted",
+      TrackUnmuted: "trackUnmuted",
+      ActiveSpeakersChanged: "activeSpeakersChanged",
+      Disconnected: "disconnected",
+      AudioPlaybackStatusChanged: "audioPlaybackChanged",
+    },
+  }));
+}
+
+export function resetLiveKitMocks() {
+  mockRoom.connect.mockClear();
+  mockRoom.disconnect.mockClear();
+  mockRoom.removeAllListeners.mockClear();
+  mockRoom.on.mockClear().mockReturnThis();
+  mockRoom.off.mockClear();
+  mockRoom.startAudio.mockClear();
+  mockRoom.remoteParticipants.clear();
+  mockLocalParticipant.setMicrophoneEnabled.mockClear();
+  mockRemoteTrack.attach.mockClear();
+  mockRemoteTrack.detach.mockClear();
 }

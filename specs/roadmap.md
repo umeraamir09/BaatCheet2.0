@@ -65,6 +65,7 @@ High-level implementation order, broken into small, independently-reviewable pha
 - **DoD:** send an image → renders in bubble; send a URL → preview card appears; use emoji picker → emoji inserted; search + send a GIF → GIF renders in bubble.
 
 ## Phase 6 — Hangout lobby (group voice via LiveKit)
+> **STATUS: COMPLETE** — Implementation complete. Automated gates green (lint, typecheck, `bun tauri build`, Convex codegen, 13 useGroupVoice tests pass). Manual smokes (3+ join/leave freely + audio stable, mute/deafen round-trip, one-click rejoin, side-by-side layout + roster + speaking indicators, mutual exclusivity with 1:1, coturn fallback across NAT, teardown on logout/close, no-regression in Phase 2/3/4/5) pending user run with a second Discord account.
 **Goal:** the infra-heavy half of the centerpiece; saved for when the rest already works.
 - LiveKit SFU deployed on Coolify; group voice room always "open."
 - Single-click join drops you into the in-progress call.

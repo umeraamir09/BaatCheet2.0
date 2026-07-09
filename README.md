@@ -197,6 +197,38 @@ Rich messaging extends the text chat with image uploads, clickable links with Op
 4. Use the GIF picker — click GIF button, trending GIFs load, search for a term, select a GIF → GIF renders in the bubble
 5. No regression — all Phase 2/3/4/5 features still work
 
+## 3.7 Phase 6 — Hangout lobby (group voice via LiveKit)
+
+Phase 6 is the voice half of the centerpiece: one always-open group voice room for the whole friend group, backed by a self-hosted LiveKit SFU. Any member clicks "Join Voice" in the lobby → dropped straight into the in-progress call (no invite/accept dance); mute/deafen/leave reuse the Phase-4 semantics; leaving and rejoining is one click with no call-teardown dance. This is the roadmap's Phase 6 and the voice half of the "Talk to everyone" loop.
+
+**Implementation details:**
+
+- **LiveKit SFU (Decision D1):** a self-hosted LiveKit server on your Ubuntu VM is the group voice backend. The single shared voice room is named `"lobby"` (mirrors the text lobby's `key: "group:lobby"`). LiveKit auto-starts the room on first connect + auto-empties on last disconnect — no create/destroy lifecycle. See `docs/livekit-deployment.md` for the full deploy guide.
+- **`livekit-client` SDK only (Decision D2-deviated):** `livekit-client` (core) + `livekit-server-sdk` (token mint) — 2 deps. The `@livekit/components-react` provider layer was dropped in favor of a hook-driven design: the `useGroupVoice` hook owns the `Room` lifecycle + drives the roster from `RoomEvent` listeners + attaches audio tracks manually via `track.attach()` (mirrors `useCall` owning `PeerCall`).
+- **Token mint via Convex action (Decision D3):** `convex/livekit.ts` → `mintToken(userId)` is a public Convex action (the codebase's first public `action`) that reads `LIVEKIT_API_KEY` + `LIVEKIT_API_SECRET` from the Convex deployment environment (set via `bunx convex env add`, NOT `.env.local`) and mints a JWT scoped to room `"lobby"`. The API secret never reaches the client.
+- **No schema change (Decision D16):** voice room state lives in LiveKit (D4), not Convex. `convex/schema.ts` is untouched. A `convex/users_internal.ts` file provides an `internalQuery` for the action to load user docs (actions don't have direct DB access).
+- **Single-click join (Decision D5):** a "Join Voice" / "Leave Voice" button in the `LobbyThread` header. Click → `mintToken` → `room.connect()` → you're in. No toast/invite flow (contrast with 1:1 Phase 4).
+- **Side-by-side layout (Decision D6):** when connected to group voice, the lobby view splits inside `<main>`: `VoiceStage` (left, `w-72`) + `LobbyThread` (right, `flex-1`). When not in voice, full-width text (Phase-5 behavior unchanged). Audio persists across view-mode switches (the `Room` lives in the hook, not the component).
+- **VoiceStage component (`src/components/voice/VoiceStage.tsx`):** fixed-width column showing the live participant roster (avatar + name + green speaking ring + muted mic icon), mute/deafen/leave controls bar, and a hidden audio container for attached `<audio>` elements.
+- **Mute/deafen reuse (Decision D7):** Discord semantics inherited from Phase 4. Mute = `localParticipant.setMicrophoneEnabled(false)`. Deafen = mute mic + mute all attached `<audio>` elements (remote playback).
+- **Mutual exclusivity (Decision D9):** one active voice connection per user. Joining group voice leaves any active 1:1 call; starting/accepting a 1:1 call leaves group voice. Enforced in `AuthenticatedLayout` wrapper callbacks (hooks stay decoupled).
+- **coturn as LiveKit TURN (Decision D10):** LiveKit's server config points at the Phase-4 coturn as its TURN server. Participants behind strict NAT relay through coturn. Server config concern, not client code.
+- **Teardown (Decision D12):** `handleLogout` + `onCloseRequested` call `groupVoice.leave()` BEFORE `call.leave()` + `goOffline()`. Race-timeout-guarded (3s).
+- **Public token-mint (known v1 limitation — Decision D13):** `mintToken` is public (no Convex auth); a misbehaving client could pass another user's `userId` and join as them. Acceptable for v1 (≤10 trusted friends).
+- **Platform scope (Decision D14):** Windows-only (inherits Phase 4 D9). WebView2 mic access validated in Phase 4.
+- **Deferred:** video, screen share, call recording, push-to-talk, VAD tuning, multiple voice rooms, voice permissions, 1:1 via LiveKit, OS notifications for voice events, Convex auth for token minting, full theme polish, formal idle-CPU/RAM profiling under gaming load.
+
+**Manual smoke tests (see `specs/2026-07-09-hangout-lobby-voice-livekit/validation.md`):**
+
+1. 3+ join/leave freely, audio stable (the Phase-6 DoD, first half) — 3+ members join/leave freely; audio stays stable with 3 concurrent speakers; roster updates live
+2. Mute / deafen round-trip in group (the Phase-6 DoD, second half) — mute and deafen toggle cleanly in the group context with Discord semantics; UI state reflects the toggles; muted mic icon propagates to other clients
+3. Leave + rejoin one-click, no teardown dance (the Phase-6 DoD, third half) — leaving and rejoining is one click each way; rapid rejoin cycles are clean with no stale state
+4. Side-by-side layout + roster + speaking indicators — voice left + text right when in voice; roster shows participants with avatars/names/speaking-ring/mute-icons; text thread works alongside voice; audio persists across view-mode switches
+5. Mutual exclusivity with 1:1 call — joining group voice leaves any active 1:1 call; starting a 1:1 call leaves group voice; only one voice connection at a time
+6. coturn TURN fallback across NAT (conditional — requires a strict-NAT test client) — the strict-NAT client connects via a TURN relay candidate through coturn
+7. Teardown on logout + window close — group voice disconnects before 1:1 call + goOffline; OS mic indicator clears; other clients see the departure live
+8. No regression in Phase 2/3/4/5 — presence, DM text, 1:1 voice, and lobby text all still work
+
 ## 4. Suggested build order
 
 1. **Auth first.** Get Discord OAuth2 + PKCE working end-to-end in a bare Tauri shell — this validates the trickiest infra piece (custom URI redirect handling) before any UI exists.
