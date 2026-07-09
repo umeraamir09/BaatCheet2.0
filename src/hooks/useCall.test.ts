@@ -14,6 +14,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { setupWebRTCMocks, resetWebRTCMocks } from "../test/mocks";
+import { playJoinSound, playLeaveSound } from "../lib/soundEffects";
+
+const mockPlayJoinSound = vi.mocked(playJoinSound);
+const mockPlayLeaveSound = vi.mocked(playLeaveSound);
+
+// Mock sound effects
+vi.mock("../lib/soundEffects", () => ({
+  playJoinSound: vi.fn(),
+  playLeaveSound: vi.fn(),
+  unlockAudio: vi.fn().mockResolvedValue(undefined),
+}));
 
 // Create mock functions for Convex
 const mockStartCall = vi.fn().mockResolvedValue("mock-call-id");
@@ -32,8 +43,7 @@ let queryCallCount = 0;
 // Setup Convex mocks before importing useCall
 vi.mock("convex/react", () => ({
   useMutation: () => {
-    mutationCallCount++;
-    // Return mocks in order: startCall, answerCall, rejectCall, endCall, markMissed, addIceCandidate
+    // Use modular arithmetic so re-renders return the same mocks
     const mocks = [
       mockStartCall,
       mockAnswerCall,
@@ -42,13 +52,16 @@ vi.mock("convex/react", () => ({
       mockMarkMissed,
       mockAddIceCandidate,
     ];
-    return mocks[mutationCallCount - 1] || vi.fn().mockResolvedValue(undefined);
+    const index = mutationCallCount % 6;
+    mutationCallCount++;
+    return mocks[index];
   },
   useQuery: () => {
-    queryCallCount++;
-    // Return mocks in order: getCall, listIncomingCalls
+    // Use modular arithmetic so re-renders return the same mocks
     const mocks = [mockGetCall, mockListIncomingCalls];
-    return mocks[queryCallCount - 1] || null;
+    const index = queryCallCount % 2;
+    queryCallCount++;
+    return mocks[index]();
   },
 }));
 
@@ -89,7 +102,7 @@ describe("useCall", () => {
       // React ran the old cleanup which saw status="initiating" (not idle/ended)
       // and called leave(), instantly disconnecting the call.
 
-      const { result } = renderHook(() => useCall("user-1" as any));
+      const { result, rerender } = renderHook(() => useCall("user-1" as any));
 
       // Start a call
       await act(async () => {
@@ -119,8 +132,8 @@ describe("useCall", () => {
         endReason: null,
       });
 
-      // Trigger re-render with new callDoc
-      await act(async () => {});
+      // Force re-render so useQuery picks up the new callDoc
+      rerender();
 
       // Status should transition to connected
       expect(result.current.status).toBe("connected");
@@ -215,7 +228,7 @@ describe("useCall", () => {
     });
 
     it("transitions to connected when call is accepted", async () => {
-      const { result } = renderHook(() => useCall("user-1" as any));
+      const { result, rerender } = renderHook(() => useCall("user-1" as any));
 
       // Start call
       await act(async () => {
@@ -244,9 +257,95 @@ describe("useCall", () => {
         endReason: null,
       });
 
-      await act(async () => {});
+      rerender();
 
       expect(result.current.status).toBe("connected");
+    });
+
+    it("plays join sound when call connects", async () => {
+      const { result, rerender } = renderHook(() => useCall("user-1" as any));
+
+      await act(async () => {
+        await result.current.startCall("user-2" as any, {
+          displayName: "Test User",
+          username: "testuser",
+          avatarUrl: "https://example.com/avatar.png",
+        });
+      });
+
+      // Simulate acceptance
+      mockGetCall.mockReturnValue({
+        _id: "mock-call-id",
+        callerId: "user-1",
+        calleeId: "user-2",
+        status: "accepted",
+        offerSdp: "mock-offer-sdp",
+        answerSdp: "mock-answer-sdp",
+        callerIceCandidates: [],
+        calleeIceCandidates: [],
+        startedAt: Date.now(),
+        connectedAt: Date.now(),
+        endedAt: null,
+        endReason: null,
+      });
+
+      rerender();
+
+      expect(result.current.status).toBe("connected");
+      expect(mockPlayJoinSound).toHaveBeenCalled();
+    });
+
+    it("plays leave sound when call ends from connected state", async () => {
+      const { result, rerender } = renderHook(() => useCall("user-1" as any));
+
+      // Start and connect the call
+      await act(async () => {
+        await result.current.startCall("user-2" as any, {
+          displayName: "Test User",
+          username: "testuser",
+          avatarUrl: "https://example.com/avatar.png",
+        });
+      });
+
+      mockGetCall.mockReturnValue({
+        _id: "mock-call-id",
+        callerId: "user-1",
+        calleeId: "user-2",
+        status: "accepted",
+        offerSdp: "mock-offer-sdp",
+        answerSdp: "mock-answer-sdp",
+        callerIceCandidates: [],
+        calleeIceCandidates: [],
+        startedAt: Date.now(),
+        connectedAt: Date.now(),
+        endedAt: null,
+        endReason: null,
+      });
+
+      rerender();
+
+      expect(result.current.status).toBe("connected");
+
+      // Now simulate the call ending
+      mockGetCall.mockReturnValue({
+        _id: "mock-call-id",
+        callerId: "user-1",
+        calleeId: "user-2",
+        status: "ended",
+        offerSdp: "mock-offer-sdp",
+        answerSdp: "mock-answer-sdp",
+        callerIceCandidates: [],
+        calleeIceCandidates: [],
+        startedAt: Date.now(),
+        connectedAt: Date.now(),
+        endedAt: Date.now(),
+        endReason: "left",
+      });
+
+      rerender();
+
+      expect(result.current.status).toBe("ended");
+      expect(mockPlayLeaveSound).toHaveBeenCalled();
     });
   });
 
@@ -288,7 +387,7 @@ describe("useCall", () => {
         },
       });
 
-      const { result } = renderHook(() => useCall("user-1" as any));
+      const { result, rerender } = renderHook(() => useCall("user-1" as any));
 
       expect(result.current.incomingCall).not.toBeNull();
 
@@ -318,7 +417,7 @@ describe("useCall", () => {
         endReason: null,
       });
 
-      await act(async () => {});
+      rerender();
 
       expect(result.current.status).toBe("connected");
     });
@@ -348,12 +447,14 @@ describe("useCall", () => {
         callId: "incoming-call-id",
       });
       expect(result.current.status).toBe("ended");
+      // Should NOT play leave sound — call never connected
+      expect(mockPlayLeaveSound).not.toHaveBeenCalled();
     });
   });
 
   describe("auto-reject busy handling (Decision D11)", () => {
     it("auto-rejects incoming call when already in a call", async () => {
-      const { result } = renderHook(() => useCall("user-1" as any));
+      const { result, rerender } = renderHook(() => useCall("user-1" as any));
 
       // Start a call (status → initiating)
       await act(async () => {
@@ -381,7 +482,7 @@ describe("useCall", () => {
         },
       });
 
-      await act(async () => {});
+      rerender();
 
       // Should auto-reject (no toast shown)
       expect(mockRejectCall).toHaveBeenCalledWith({
@@ -410,6 +511,45 @@ describe("useCall", () => {
         callId: "mock-call-id",
         reason: "left",
       });
+      expect(result.current.status).toBe("ended");
+    });
+
+    it("plays leave sound when self leaves a connected call", async () => {
+      const { result, rerender } = renderHook(() => useCall("user-1" as any));
+
+      await act(async () => {
+        await result.current.startCall("user-2" as any, {
+          displayName: "Test User",
+          username: "testuser",
+          avatarUrl: "https://example.com/avatar.png",
+        });
+      });
+
+      mockGetCall.mockReturnValue({
+        _id: "mock-call-id",
+        callerId: "user-1",
+        calleeId: "user-2",
+        status: "accepted",
+        offerSdp: "mock-offer-sdp",
+        answerSdp: "mock-answer-sdp",
+        callerIceCandidates: [],
+        calleeIceCandidates: [],
+        startedAt: Date.now(),
+        connectedAt: Date.now(),
+        endedAt: null,
+        endReason: null,
+      });
+
+      rerender();
+
+      expect(result.current.status).toBe("connected");
+      mockPlayLeaveSound.mockClear();
+
+      await act(async () => {
+        await result.current.leave("left");
+      });
+
+      expect(mockPlayLeaveSound).toHaveBeenCalled();
       expect(result.current.status).toBe("ended");
     });
 

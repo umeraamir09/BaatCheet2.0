@@ -1,6 +1,4 @@
-import { useEffect, useRef } from "react";
-import { Emoji } from "emoji-mart";
-import data from "@emoji-mart/data";
+import { findEmojiByNative } from "../../lib/emoji";
 import { getAppleSpritesheetURL } from "../../lib/emojiSpritesheet";
 
 interface AppleEmojiProps {
@@ -9,28 +7,25 @@ interface AppleEmojiProps {
 }
 
 export function AppleEmoji({ native, size = "1.2em" }: AppleEmojiProps) {
-  const containerRef = useRef<HTMLSpanElement>(null);
-  const instanceRef = useRef<Emoji | null>(null);
+  const emoji = findEmojiByNative(native);
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-    container.innerHTML = "";
-    instanceRef.current = new Emoji({
-      native,
-      set: "apple",
-      data,
-      size,
-      getSpritesheetURL: getAppleSpritesheetURL,
-      ref: containerRef,
-    });
-    return () => {
-      container.innerHTML = "";
-      instanceRef.current = null;
-    };
-  }, [native, size]);
+  if (!emoji) {
+    return <>{native}</>;
+  }
 
-  return <span ref={containerRef} className="inline-block align-middle" />;
+  return (
+    <span
+      role="img"
+      aria-label={emoji.name}
+      title={emoji.name}
+      className="inline-block align-[-0.18em] shrink-0"
+      style={{
+        width: size,
+        height: size,
+        backgroundImage: `url("${getAppleSpritesheetURL()}")`,
+        backgroundPosition: `${(emoji.sheetX / 61) * 100}% ${(emoji.sheetY / 61) * 100}%`,
+        backgroundSize: "6200% 6200%",
+      }}
+    />
+  );
 }
