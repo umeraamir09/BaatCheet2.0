@@ -90,7 +90,8 @@ pub async fn handle_callback(app: AppHandle, code: String, state: String) {
         }
     };
 
-    if let Err(e) = store::save(&tokens) {
+    // Persist client_id alongside tokens so refresh works on cold start.
+    if let Err(e) = store::save(&tokens, Some(&pending.client_id)) {
         let _ = app.emit("discord:login-failed", format!("failed to save tokens: {e}"));
         return;
     }
@@ -109,29 +110,70 @@ pub async fn handle_callback(app: AppHandle, code: String, state: String) {
 ///
 /// Loads tokens from the keyring. If the access token is still valid (not
 /// expired or near-expiry), fetches the profile and returns the `User`.
-/// If expired or missing, returns `None` (TG6 will handle refresh).
+/// If expired, attempts to refresh using the stored client_id + refresh_token.
+/// If refresh fails or tokens are missing, returns `None`.
 pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>, String> {
     let stored = match store::load()? {
         Some(s) => s,
         None => return Ok(None),
     };
 
+    let auth_state = app.state::<AuthState>();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock before Unix epoch")
         .as_secs();
 
-    // If the access token is expired or within the margin, treat as needing refresh.
-    if stored.expires_at <= now + EXPIRY_MARGIN_SECS {
-        return Ok(None);
+    // Restore client_id to AuthState from keychain (needed for refresh).
+    if let Some(ref cid) = stored.client_id {
+        if let Ok(mut auth_cid) = auth_state.client_id.lock() {
+            *auth_cid = Some(cid.clone());
+        }
     }
 
-    // Access token still valid — fetch profile to derive avatar URL.
+    let access_token = if stored.expires_at <= now + EXPIRY_MARGIN_SECS {
+        // Access token expired or near-expiry — attempt refresh.
+        eprintln!("[session] Access token expired, attempting refresh...");
+        let client_id = match stored.client_id {
+            Some(cid) => cid,
+            None => {
+                eprintln!("[session] No client_id stored, cannot refresh");
+                return Ok(None);
+            }
+        };
+
+        let client = match oauth::http_client() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[session] Failed to create HTTP client for refresh: {e}");
+                return Ok(None);
+            }
+        };
+
+        match oauth::refresh_tokens(&client, &client_id, &stored.refresh_token).await {
+            Ok(new_tokens) => {
+                // Save refreshed tokens with client_id.
+                if let Err(e) = store::save(&new_tokens, Some(&client_id)) {
+                    eprintln!("[session] Failed to save refreshed tokens: {e}");
+                    return Ok(None);
+                }
+                eprintln!("[session] Token refresh successful");
+                new_tokens.access_token
+            }
+            Err(e) => {
+                eprintln!("[session] Token refresh failed: {e}");
+                return Ok(None);
+            }
+        }
+    } else {
+        stored.access_token
+    };
+
+    // Access token valid (or just refreshed) — fetch profile to derive avatar URL.
     let client = oauth::http_client()?;
-    let discord_user = profile::fetch_me(&client, &stored.access_token).await?;
+    let discord_user = profile::fetch_me(&client, &access_token).await?;
 
     // TG6: start the proactive refresh timer after successful restore.
-    // The client_id should already be in AuthState from the original login.
     start_refresh_timer(app);
 
     Ok(Some(profile::to_user(&discord_user)))
@@ -212,7 +254,8 @@ async fn perform_refresh(app: AppHandle) {
     };
     match oauth::refresh_tokens(&client, &client_id, &stored.refresh_token).await {
         Ok(tokens) => {
-            if let Err(e) = store::save(&tokens) {
+            // Persist client_id alongside refreshed tokens.
+            if let Err(e) = store::save(&tokens, Some(&client_id)) {
                 eprintln!("Failed to save refreshed tokens: {e}");
                 clear_session_and_emit(&app);
                 return;
@@ -274,11 +317,12 @@ pub fn dev_set_expires_in(seconds: u64) -> Result<(), String> {
         .as_secs();
     let new_expires_at = now + seconds;
 
-    // Create a new StoredTokens with the modified expiry.
+    // Create a new StoredTokens with the modified expiry, preserving client_id.
     let modified = store::StoredTokens {
         access_token: stored.access_token,
         refresh_token: stored.refresh_token,
         expires_at: new_expires_at,
+        client_id: stored.client_id,
     };
 
     // Save directly to keyring (bypassing the normal save flow).
@@ -297,11 +341,12 @@ pub fn dev_set_expires_in(seconds: u64) -> Result<(), String> {
 pub fn dev_corrupt_refresh() -> Result<(), String> {
     let stored = store::load()?.ok_or("no tokens in keychain")?;
 
-    // Create a new StoredTokens with a corrupted refresh token.
+    // Create a new StoredTokens with a corrupted refresh token, preserving client_id.
     let corrupted = store::StoredTokens {
         access_token: stored.access_token,
         refresh_token: "corrupted-refresh-token-for-testing".to_string(),
         expires_at: stored.expires_at,
+        client_id: stored.client_id,
     };
 
     // Save directly to keyring.
@@ -342,7 +387,8 @@ where
 
             let client = oauth::http_client()?;
             let tokens = oauth::refresh_tokens(&client, &client_id, &stored.refresh_token).await?;
-            store::save(&tokens)?;
+            // Persist client_id alongside refreshed tokens.
+            store::save(&tokens, Some(&client_id))?;
 
             // Retry with new access token.
             op(tokens.access_token).await

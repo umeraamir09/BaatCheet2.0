@@ -13,21 +13,13 @@ interface IncomingCallToastProps {
   onDecline: () => void;
 }
 
-export function IncomingCallToast({
-  caller,
-  onAccept,
-  onDecline,
-}: IncomingCallToastProps) {
+export function IncomingCallToast({ caller, onAccept, onDecline }: IncomingCallToastProps) {
   const name = caller?.displayName ?? caller?.username ?? "Someone";
 
   return (
     <div className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-lg bg-discord-surface px-4 py-3 shadow-lg">
       {caller?.avatarUrl && (
-        <img
-          src={caller.avatarUrl}
-          alt={`${name} avatar`}
-          className="h-10 w-10 rounded-full"
-        />
+        <img src={caller.avatarUrl} alt={`${name} avatar`} className="h-10 w-10 rounded-full" />
       )}
       <div className="flex flex-col">
         <p className="text-sm font-medium text-white">{name}</p>

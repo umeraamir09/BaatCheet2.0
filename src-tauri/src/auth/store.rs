@@ -9,21 +9,26 @@ const KEYCHAIN_ACCOUNT: &str = "discord_tokens";
 
 /// Persisted token set stored in the OS keychain (Decision D1 — never plaintext).
 /// `expires_at` is absolute epoch seconds (spec task 4.4).
+/// `client_id` is the Discord Client ID needed for token refresh on cold start.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredTokens {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_at: u64,
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 /// Save the token set to the OS keychain. The `TokenSet` from Discord (which
 /// has relative `expires_in`) is converted to absolute `expires_at` before storage.
-pub fn save(tokens: &TokenSet) -> Result<(), String> {
+/// The `client_id` is persisted alongside tokens so refresh works on cold start.
+pub fn save(tokens: &TokenSet, client_id: Option<&str>) -> Result<(), String> {
     let expires_at = current_epoch_secs() + tokens.expires_in;
     let stored = StoredTokens {
         access_token: tokens.access_token.clone(),
         refresh_token: tokens.refresh_token.clone(),
         expires_at,
+        client_id: client_id.map(|s| s.to_string()),
     };
     let json = serde_json::to_string(&stored).map_err(|e| format!("serialize tokens: {e}"))?;
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)

@@ -41,6 +41,40 @@ export default defineSchema({
     conversationId: v.id("conversations"),
     senderId: v.id("users"),
     body: v.string(),
+    // Rich messaging — optional fields (backward-compatible with existing messages)
+    attachments: v.optional(
+      v.array(
+        v.union(
+          v.object({
+            kind: v.literal("image"),
+            storageId: v.id("_storage"),
+            contentType: v.string(),
+            width: v.union(v.number(), v.null()),
+            height: v.union(v.number(), v.null()),
+          }),
+          v.object({
+            kind: v.literal("gif"),
+            url: v.string(),
+            width: v.union(v.number(), v.null()),
+            height: v.union(v.number(), v.null()),
+            alt: v.union(v.string(), v.null()),
+          }),
+        ),
+      ),
+    ),
+    linkPreview: v.optional(
+      v.union(
+        v.object({
+          url: v.string(),
+          title: v.union(v.string(), v.null()),
+          description: v.union(v.string(), v.null()),
+          imageUrl: v.union(v.string(), v.null()),
+          siteName: v.union(v.string(), v.null()),
+          fetchedAt: v.number(),
+        }),
+        v.null(),
+      ),
+    ),
     createdAt: v.number(),
   }).index("byConversation", ["conversationId", "createdAt"]), // ordered history
   // Phase 3 — Typing indicators (Decision D3). No cron: stale docs are

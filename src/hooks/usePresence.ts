@@ -49,10 +49,7 @@ export function usePresence(discordId: string | null): UsePresenceResult {
   const setOffline = useMutation(api.presence.setOffline);
 
   // TG6: reactive lookup of the caller's users._id by discordId.
-  const myUser = useQuery(
-    api.presence.getMyUser,
-    discordId ? { discordId } : "skip",
-  );
+  const myUser = useQuery(api.presence.getMyUser, discordId ? { discordId } : "skip");
   console.log("[usePresence] myUser:", myUser);
   const userId = myUser?._id ?? null;
   console.log("[usePresence] userId:", userId);
@@ -88,9 +85,7 @@ export function usePresence(discordId: string | null): UsePresenceResult {
     cleanedRef.current = false;
 
     // Mark online + start the heartbeat.
-    setOnline({ userId, discordId }).catch((e) =>
-      console.error("presence setOnline failed:", e),
-    );
+    setOnline({ userId, discordId }).catch((e) => console.error("presence setOnline failed:", e));
 
     intervalRef.current = setInterval(() => {
       heartbeat({ userId }).catch((e) =>

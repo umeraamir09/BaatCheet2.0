@@ -144,6 +144,59 @@ Phase 4 is the first voice: prove direct peer-to-peer WebRTC audio between two f
 5. Busy + offline callee handling — call button is disabled when peer offline; incoming call while in-call is auto-rejected (no toast), giving the caller a fast busy signal
 6. coturn TURN fallback across NAT (conditional — requires a strict-NAT test client) — the call connects via a TURN `relay` candidate on a strict-NAT network; two-way audio works
 
+## 3.5 Phase 5 — Hangout lobby (text half)
+
+Phase 5 is the group text half of the centerpiece: one shared, always-on "lobby" room for the whole friend group. Any member posts to the lobby → all members see it live; history persists across restarts. This is the roadmap's Phase 5 and the text half of the "Talk to everyone" loop. The key insight: **zero schema change** — Phase 3's generic `conversations`/`messages`/`typing` tables were designed for this. The lobby is a `conversations` doc with `type: "group"`, `key: "group:lobby"`, reusing `messages` + `typing` verbatim.
+
+**Implementation details:**
+
+- **No schema change (Decision D1):** `convex/schema.ts` is untouched. The `conversations` table already supports `type: "group"` (it's `v.string()`), `participantIds` with >2 entries (it's `v.array(v.id("users"))`), and `key: "group:lobby"` (it's `v.string()`). This validates Phase 3 D1's forward-looking generic design.
+- **Lobby Convex functions (`convex/lobby.ts`):** `getOrCreateLobby(userId)` mutation (looks up by `key === "group:lobby"` via `byKey` index; inserts if missing; adds self to `participantIds` if found) + `getLobby` reactive query (returns the single lobby doc or null). Both public (Decision D7 — v1 spoofing limitation accepted).
+- **Icon rail (Decision D3):** the deferred Phase-3 D2 surface lands now. A narrow (~56px) leftmost vertical rail with "Lobby" (hash icon) and "Direct Messages" (person icon). Selecting "Lobby" shows the group text thread; selecting "DMs" shows the selected DM. The sidebar (friends/DMs/presence) persists in both modes. Clicking a friend/DM in the sidebar while in "Lobby" mode switches to "DMs" mode + opens that DM (cross-navigation).
+- **Shared chat components (`src/components/chat/`):** `MessageBubble` + `Composer` extracted from `DMThread` into shared files. Both `DMThread` and `LobbyThread` import them — single source of truth for bubble/composer rendering.
+- **Chat hook generalization (Decision D4):** `useDMThread` renamed to `useChatThread` (`src/hooks/useChatThread.ts`). The hook was already generic (keyed on `conversationId` + `myUserId`); the rename makes the name honest. Both `DMThread` and `LobbyThread` use it.
+- **LobbyThread (`src/components/LobbyThread.tsx`):** group text thread with "Lobby" header + group icon + live "N online" count (from the existing presence subscription). Multi-person typing indicator ("X and Y are typing…", "X, Y and N others are typing…"). No call button (group voice is Phase 6 — Decision D8).
+- **View mode state + persistence (Decision D10):** `AuthenticatedLayout` owns a `viewMode` state (`"lobby" | "dms"`). Last-selected mode persists across relaunch via localStorage (`baatcheet.viewmode`). Default on fresh login: `"lobby"` (the centerpiece). Cleared on logout (no cross-user leakage).
+- **Lobby auto-creation on login (Decision D6):** `getOrCreateLobby(userId)` called once per session when `presence.userId` becomes available (ref-guarded). The lobby is always-on.
+- **Floating call overlay persists across view modes (Decision D8):** the Phase-4 call overlay (`CallControls` + `IncomingCallToast`) renders outside the view-mode conditional — a 1:1 call works while browsing the lobby.
+- **Public mutations (known v1 limitation — Decision D7):** `getOrCreateLobby` is public (no Convex auth middleware), keyed by `userId`. A misbehaving client could create a rogue lobby. Acceptable for v1 (≤10 trusted friends, Convex dev backend); hardening deferred.
+- **Deferred:** group voice / LiveKit SFU (Phase 6), side-by-side lobby layout (Phase 6), multiple channels/rooms (not in v1), message editing/deletion/reactions/attachments (not in v1), full Discord-derived theme polish (Phase 7).
+
+**Manual smoke tests (see `specs/2026-07-08-hangout-lobby-text/validation.md`):**
+
+1. Post to lobby → all members see it live (the Phase-5 DoD, first half) — any group member posts to the lobby → all members viewing the lobby see it live within ~1s
+2. History persists across restarts (the Phase-5 DoD, second half) — full lobby history restored on app restart; no data loss
+3. Typing indicator in group context — multi-person format renders correctly (1, 2, and 3+ typers); self excluded
+4. Navigation round-trip (lobby ↔ DMs, view-mode persistence) — icon rail switches between lobby and DMs; cross-navigation from sidebar works; view mode persists across relaunch and is cleared on logout
+5. No regression in Phase 2/3/4 — presence, DM text, and 1:1 voice all still work; floating call overlay persists across view-mode switches
+
+## 3.6 Rich messaging (images, links, emojis, GIFs)
+
+Rich messaging extends the text chat with image uploads, clickable links with OpenGraph preview cards, an Apple-style emoji picker, and a GIPHY-powered GIF picker. All features work in both DM and lobby threads.
+
+**Implementation details:**
+
+- **Schema extension:** `messages` table gains two optional fields: `attachments` (array of image/GIF objects) and `linkPreview` (OG metadata object or null). Both `v.optional()` for backward compatibility with existing messages.
+- **Image uploads (`convex/storage.ts`):** `generateUploadUrl` mutation produces a short-lived upload URL. The client POSTs the file directly to Convex file storage, receives a `storageId`, and passes it to `sendMessage` as an image attachment. `listMessages` resolves `storageId` → URL via `ctx.storage.getUrl()`.
+- **Link previews (`convex/linkPreviews.ts`):** `fetchLinkPreview` internal action fetches a URL server-side (no CORS), parses HTML for OpenGraph meta tags (`og:title`, `og:description`, `og:image`, `og:site_name`), and stores the result on the message via `storeLinkPreview` internal mutation. Scheduled by `sendMessage` when a URL is detected in the body. Preview card appears reactively ~1-3s after the message.
+- **Rich text rendering (`src/components/chat/RichContent.tsx`):** Parses message text for URLs (via `linkifyjs`) and renders them as clickable links that open in the system browser (via Tauri `opener` plugin). Preserves `whitespace-pre-wrap break-words`.
+- **Link preview card (`src/components/chat/LinkPreviewCard.tsx`):** Renders a Discord-style preview card below the message text with thumbnail, title, description, and domain. Clickable — opens URL in system browser.
+- **Emoji picker (`src/components/chat/EmojiPicker.tsx`):** Wraps `@emoji-mart/react` Picker with `set="apple"` and `theme="dark"`. Selected emoji's native Unicode character is inserted at the textarea cursor position.
+- **GIF picker (`src/components/chat/GifPicker.tsx`):** Custom GIPHY search UI with trending GIFs by default, debounced search, and a grid of thumbnails. Uses raw `fetch` calls to the GIPHY API (no SDK dependency). GIFs are referenced by GIPHY CDN URL (no Convex storage). Requires `VITE_GIPHY_API_KEY` env var — GIF button hidden if key is missing.
+- **Composer toolbar:** Three icon buttons (emoji, GIF, image upload) above the textarea. Image upload uses `<input type="file" accept="image/*">` (no Tauri plugin needed). Pending image/GIF preview shown above the textarea with remove button.
+- **`useChatThread` extended:** `send(body, attachments?)` handles image upload flow (generateUploadUrl → POST → storageId) before calling `sendMessage`. GIF attachments passed by URL directly.
+- **`useComposerState` hook (`src/hooks/useComposerState.ts`):** Shared state management for pending image, pending GIF, and emoji insertion. Used by both `DMThread` and `LobbyThread`.
+- **New dependencies:** `@emoji-mart/react` (7KB), `@emoji-mart/data` (28MB unpacked, tree-shakeable), `linkifyjs` (259KB, zero deps).
+- **New env var:** `VITE_GIPHY_API_KEY` — GIPHY beta key (client-safe, Vite-embedded).
+
+**Manual smoke tests:**
+
+1. Send an image — select a file, preview appears, send → image renders in the bubble for both sender and receiver
+2. Send a message with a URL — link is clickable, preview card appears ~1-3s later with title/description/thumbnail
+3. Use the emoji picker — click emoji button, picker opens with Apple-style emojis, select one → inserted at cursor
+4. Use the GIF picker — click GIF button, trending GIFs load, search for a term, select a GIF → GIF renders in the bubble
+5. No regression — all Phase 2/3/4/5 features still work
+
 ## 4. Suggested build order
 
 1. **Auth first.** Get Discord OAuth2 + PKCE working end-to-end in a bare Tauri shell — this validates the trickiest infra piece (custom URI redirect handling) before any UI exists.

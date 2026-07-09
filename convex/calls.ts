@@ -22,6 +22,8 @@ import { query, mutation } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 
+const LOG_PREFIX = "[convex/calls]";
+
 /**
  * Start a call (caller initiates).
  *
@@ -36,12 +38,15 @@ export const startCall = mutation({
     offerSdp: v.string(),
   },
   handler: async (ctx, args): Promise<Id<"calls">> => {
+    console.log(
+      `${LOG_PREFIX} startCall: caller=${args.callerId}, callee=${args.calleeId}, offerSdp.length=${args.offerSdp.length}`,
+    );
     if (args.callerId === args.calleeId) {
       throw new ConvexError("Cannot call yourself");
     }
 
     const now = Date.now();
-    return await ctx.db.insert("calls", {
+    const callId = await ctx.db.insert("calls", {
       callerId: args.callerId,
       calleeId: args.calleeId,
       status: "calling",
@@ -54,6 +59,8 @@ export const startCall = mutation({
       endedAt: null,
       endReason: null,
     });
+    console.log(`${LOG_PREFIX} startCall: created call doc ${callId}`);
+    return callId;
   },
 });
 
@@ -69,9 +76,17 @@ export const answerCall = mutation({
     answerSdp: v.string(),
   },
   handler: async (ctx, args) => {
+    console.log(
+      `${LOG_PREFIX} answerCall: callId=${args.callId}, answerSdp.length=${args.answerSdp.length}`,
+    );
     const call = await ctx.db.get(args.callId);
     if (!call) throw new ConvexError("Call not found");
-    if (call.status !== "calling") return; // idempotent
+    if (call.status !== "calling") {
+      console.log(
+        `${LOG_PREFIX} answerCall: call status is ${call.status}, not "calling" — skipping`,
+      );
+      return;
+    }
 
     const now = Date.now();
     await ctx.db.patch(args.callId, {
@@ -79,6 +94,7 @@ export const answerCall = mutation({
       answerSdp: args.answerSdp,
       connectedAt: now,
     });
+    console.log(`${LOG_PREFIX} answerCall: call ${args.callId} transitioned to accepted`);
   },
 });
 
@@ -92,9 +108,15 @@ export const rejectCall = mutation({
     callId: v.id("calls"),
   },
   handler: async (ctx, args) => {
+    console.log(`${LOG_PREFIX} rejectCall: callId=${args.callId}`);
     const call = await ctx.db.get(args.callId);
     if (!call) throw new ConvexError("Call not found");
-    if (call.status !== "calling") return; // idempotent
+    if (call.status !== "calling") {
+      console.log(
+        `${LOG_PREFIX} rejectCall: call status is ${call.status}, not "calling" — skipping`,
+      );
+      return;
+    }
 
     const now = Date.now();
     await ctx.db.patch(args.callId, {
@@ -102,6 +124,7 @@ export const rejectCall = mutation({
       endedAt: now,
       endReason: "rejected",
     });
+    console.log(`${LOG_PREFIX} rejectCall: call ${args.callId} transitioned to rejected`);
   },
 });
 
@@ -118,9 +141,13 @@ export const endCall = mutation({
     reason: v.string(), // "completed" | "error" | "left" | "cancelled"
   },
   handler: async (ctx, args) => {
+    console.log(`${LOG_PREFIX} endCall: callId=${args.callId}, reason=${args.reason}`);
     const call = await ctx.db.get(args.callId);
     if (!call) throw new ConvexError("Call not found");
     if (call.status === "ended" || call.status === "rejected" || call.status === "missed") {
+      console.log(
+        `${LOG_PREFIX} endCall: call status is ${call.status}, already terminal — skipping`,
+      );
       return; // idempotent
     }
 
@@ -130,6 +157,9 @@ export const endCall = mutation({
       endedAt: now,
       endReason: args.reason,
     });
+    console.log(
+      `${LOG_PREFIX} endCall: call ${args.callId} transitioned to ended (reason: ${args.reason})`,
+    );
   },
 });
 
@@ -144,9 +174,15 @@ export const markMissed = mutation({
     callId: v.id("calls"),
   },
   handler: async (ctx, args) => {
+    console.log(`${LOG_PREFIX} markMissed: callId=${args.callId}`);
     const call = await ctx.db.get(args.callId);
     if (!call) throw new ConvexError("Call not found");
-    if (call.status !== "calling") return; // idempotent
+    if (call.status !== "calling") {
+      console.log(
+        `${LOG_PREFIX} markMissed: call status is ${call.status}, not "calling" — skipping`,
+      );
+      return; // idempotent
+    }
 
     const now = Date.now();
     await ctx.db.patch(args.callId, {
@@ -154,6 +190,7 @@ export const markMissed = mutation({
       endedAt: now,
       endReason: "missed",
     });
+    console.log(`${LOG_PREFIX} markMissed: call ${args.callId} transitioned to missed`);
   },
 });
 
@@ -171,6 +208,9 @@ export const addIceCandidate = mutation({
     candidate: v.string(), // JSON-encoded RTCIceCandidateInit
   },
   handler: async (ctx, args) => {
+    console.log(
+      `${LOG_PREFIX} addIceCandidate: callId=${args.callId}, side=${args.side}, candidate.length=${args.candidate.length}`,
+    );
     const call = await ctx.db.get(args.callId);
     if (!call) throw new ConvexError("Call not found");
 
@@ -178,10 +218,16 @@ export const addIceCandidate = mutation({
       await ctx.db.patch(args.callId, {
         callerIceCandidates: [...call.callerIceCandidates, args.candidate],
       });
+      console.log(
+        `${LOG_PREFIX} addIceCandidate: caller ICE candidates now ${call.callerIceCandidates.length + 1}`,
+      );
     } else if (args.side === "callee") {
       await ctx.db.patch(args.callId, {
         calleeIceCandidates: [...call.calleeIceCandidates, args.candidate],
       });
+      console.log(
+        `${LOG_PREFIX} addIceCandidate: callee ICE candidates now ${call.calleeIceCandidates.length + 1}`,
+      );
     }
   },
 });

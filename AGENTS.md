@@ -2,7 +2,7 @@
 
 **Stack:** Tauri 2 (Rust) + React 19 / TypeScript / Vite 7 SPA + Tailwind 4 + Convex 1.42 + bun
 
-**Status:** Phase 0 (scaffold), Phase 1 (Discord OAuth2 + PKCE auth), Phase 2 (Presence), Phase 3 (1:1 DM text), and Phase 4 (1:1 voice — direct WebRTC) complete. No CI, no test framework, no frontend tests.
+**Status:** Phase 0 (scaffold), Phase 1 (Discord OAuth2 + PKCE auth), Phase 2 (Presence), Phase 3 (1:1 DM text), Phase 4 (1:1 voice — direct WebRTC), Phase 5 (Hangout lobby — group text half), and Rich messaging (images, links, emojis, GIFs) complete. No CI, no test framework, no frontend tests.
 
 ## Commands
 
@@ -28,14 +28,14 @@
 ## Architecture
 
 - **`src-tauri/src/auth/`** — Rust auth module: `oauth.rs` (Discord endpoints), `pkce.rs` (S256 challenge), `profile.rs` (`/users/@me` + avatar URLs), `store.rs` (OS keychain), `session.rs` (flow orchestration + refresh timer)
-- **`src/`** — React frontend: `App.tsx` (auth UI states), `auth.ts` (Tauri invoke wrappers), `hooks/useAuth.ts` (state machine + Tauri event listeners)
-- **`convex/`** — Convex functions: `users.ts` (upsertUser mutation), `counter.ts` (scaffold remnant)
+- **`src/`** — React frontend: `App.tsx` (auth UI states), `auth.ts` (Tauri invoke wrappers), `hooks/useAuth.ts` (state machine + Tauri event listeners), `hooks/usePresence.ts` (presence lifecycle + heartbeat), `hooks/useChatThread.ts` (shared chat hook — messages + typing + image upload), `hooks/useComposerState.ts` (shared composer state — pending image/GIF/emoji), `hooks/useCall.ts` (1:1 voice state machine), `components/AuthenticatedLayout.tsx` (icon rail + sidebar + main pane — lobby/DM view mode), `components/PresenceSidebar.tsx` (friends/DMs list), `components/DMThread.tsx` (1:1 DM thread), `components/LobbyThread.tsx` (group lobby thread), `components/IconRail.tsx` (lobby/DMs navigation), `components/chat/` (shared `MessageBubble` + `Composer` + `RichContent` + `LinkPreviewCard` + `EmojiPicker` + `GifPicker`), `components/call/` (call overlay — `IncomingCallToast` + `CallControls`), `lib/emoji.ts` (emoji-mart reverse map), `lib/giphy.ts` (GIPHY API client), `webrtc/peerConnection.ts` (raw WebRTC wrapper)
+- **`convex/`** — Convex functions: `users.ts` (upsertUser mutation), `presence.ts` (presence lifecycle + heartbeat + sweep), `conversations.ts` (DM lifecycle + list), `messages.ts` (send + list + attachments + link preview scheduling), `typing.ts` (typing indicators), `calls.ts` (1:1 voice signaling), `lobby.ts` (group lobby getOrCreate + get), `storage.ts` (generateUploadUrl for image uploads), `linkPreviews.ts` (OG metadata fetch action + store mutation), `counter.ts` (scaffold remnant)
 - **`specs/`** — Dated phase folders with `requirements.md`, `plan.md`, `validation.md`
 
 ## Auth flow quirks
 
 - **PKCE public client:** no client secret anywhere. `git grep -iE "client_secret|clientSecret"` must return nothing.
-- **Env vars:** Rust does NOT read `.env.local`. The frontend reads `VITE_DISCORD_CLIENT_ID` (Vite-embedded) and passes it as a command argument to Rust `start_discord_login`.
+- **Env vars:** Rust does NOT read `.env.local`. The frontend reads `VITE_DISCORD_CLIENT_ID` (Vite-embedded) and passes it as a command argument to Rust `start_discord_login`. `VITE_GIPHY_API_KEY` enables the GIF picker (optional — GIF button hidden if missing).
 - **Token storage:** OS keychain via `keyring` crate. Never localStorage, never plaintext.
 - **Refresh:** Proactive timer at `expires_at - 60s` + reactive 401 retry wrapper (`with_refresh_retry`). Both guarded by a tokio mutex.
 - **Deep-link:** Handled by `tauri-plugin-deep-link` (`baatcheet://callback`). Two paths cover warm + cold launch: (1) `on_open_url` callback, (2) `single-instance` plugin argv callback (Windows).

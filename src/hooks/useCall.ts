@@ -3,27 +3,27 @@
  *
  * State machine: idle → initiating (caller) / ringing (callee) → connected → ended.
  *
- * Caller path: startCall(peerUserId) → getUserMedia → PeerCall.startCaller() →
- *   offerSdp → startCall mutation → callId → subscribe getCall(callId) → trickle ICE →
+ * Caller path: startCall(peerUserId) → create call doc → set callIdRef →
+ *   getUserMedia → PeerCall.startCaller() → offerSdp → update call doc →
+ *   subscribe getCall(callId) → trickle ICE (buffered until callId set) →
  *   on answerSdp → setRemoteDescription → on remote stream → connected.
  *
- * Callee path: subscribe listIncomingCalls(myUserId) → on incoming doc → ringing →
- *   accept → getUserMedia → PeerCall.startCallee(offerSdp) → answerSdp → answerCall →
- *   subscribe getCall → trickle ICE → on remote stream → connected.
+ * Callee path: subscribe listIncomingCalls(myUserId) → on incoming doc →
+ *   set callIdRef → getUserMedia → PeerCall.startCallee(offerSdp) → answerSdp →
+ *   answerCall → subscribe getCall → trickle ICE → on remote stream → connected.
  *   Decision D11 auto-reject: if status !== idle, auto-reject (no toast).
  *
  * leave(reason): endCall → PeerCall.close() → stop tracks → status ended.
  * Ring timeout (caller): 30s → markMissed.
  * Cleanup on unmount / logout / window close: leave if active.
- *
- * Mirrors usePresence/useDMThread patterns: "skip" gating, cleanedRef idempotency,
- * Promise.race teardown, cleanup keyed on callId.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import { PeerCall } from "../webrtc/peerConnection";
+
+const LOG_PREFIX = "[useCall]";
 
 export type CallStatus = "idle" | "initiating" | "ringing" | "connected" | "ended";
 
@@ -34,15 +34,16 @@ export interface UseCallResult {
   peerProfile: { displayName: string | null; username: string; avatarUrl: string } | null;
   muted: boolean;
   deafened: boolean;
-  startCall: (peerUserId: Id<"users">, peerProfile: { displayName: string | null; username: string; avatarUrl: string }) => Promise<void>;
+  startCall: (
+    peerUserId: Id<"users">,
+    peerProfile: { displayName: string | null; username: string; avatarUrl: string },
+  ) => Promise<void>;
   accept: () => Promise<void>;
   reject: () => Promise<void>;
   leave: (reason?: string) => Promise<void>;
   setMuted: (muted: boolean) => void;
   setDeafened: (deafened: boolean) => void;
-  /** Ref to the <audio> element for remote stream attachment. */
   audioRef: React.MutableRefObject<HTMLAudioElement | null>;
-  /** The incoming call doc (for the toast). null if no incoming call. */
   incomingCall: {
     _id: Id<"calls">;
     callerId: Id<"users">;
@@ -53,11 +54,6 @@ export interface UseCallResult {
 const RING_TIMEOUT_MS = 30_000;
 const LEAVE_TIMEOUT_MS = 2_000;
 
-/**
- * Call lifecycle hook.
- *
- * @param myUserId - the caller's Convex users._id (from usePresence)
- */
 export function useCall(myUserId: Id<"users"> | null): UseCallResult {
   const [status, setStatus] = useState<CallStatus>("idle");
   const [callId, setCallId] = useState<Id<"calls"> | null>(null);
@@ -76,6 +72,15 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const iceCandidatesSeenRef = useRef<Set<string>>(new Set());
   const callIdRef = useRef<Id<"calls"> | null>(null);
+  const pendingCandidatesRef = useRef<{ side: string; json: string }[]>([]);
+  const answerAppliedRef = useRef(false);
+  const statusRef = useRef<CallStatus>("idle");
+
+  // Keep statusRef in sync with status state
+  useEffect(() => {
+    console.log(`${LOG_PREFIX} Status transition: ${statusRef.current} → ${status}`);
+    statusRef.current = status;
+  }, [status]);
 
   // Mutations.
   const startCallMutation = useMutation(api.calls.startCall);
@@ -85,11 +90,6 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
   const markMissedMutation = useMutation(api.calls.markMissed);
   const addIceCandidateMutation = useMutation(api.calls.addIceCandidate);
 
-  // Keep callIdRef in sync with callId state
-  useEffect(() => {
-    callIdRef.current = callId;
-  }, [callId]);
-
   // Reactive queries.
   const callDoc = useQuery(api.calls.getCall, callId ? { callId } : "skip");
   const incomingCallDoc = useQuery(
@@ -97,10 +97,49 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
     myUserId ? { calleeId: myUserId } : "skip",
   );
 
-  // Cleanup helper — declared early so it can be used in effects below.
+  // Flush buffered ICE candidates once callId is available.
+  const flushPendingCandidates = useCallback(() => {
+    if (!callIdRef.current || pendingCandidatesRef.current.length === 0) return;
+    console.log(
+      `${LOG_PREFIX} Flushing ${pendingCandidatesRef.current.length} buffered ICE candidates`,
+    );
+    for (const { side, json } of pendingCandidatesRef.current) {
+      addIceCandidateMutation({
+        callId: callIdRef.current,
+        side,
+        candidate: json,
+      }).catch((e) => console.error(`${LOG_PREFIX} flush addIceCandidate failed:`, e));
+    }
+    pendingCandidatesRef.current = [];
+  }, [addIceCandidateMutation]);
+
+  // Buffer or send an ICE candidate.
+  const sendIceCandidate = useCallback(
+    (side: string, candidate: RTCIceCandidateInit) => {
+      const json = JSON.stringify(candidate);
+      if (callIdRef.current) {
+        console.log(`${LOG_PREFIX} Sending ICE candidate (${side}) immediately`);
+        addIceCandidateMutation({
+          callId: callIdRef.current,
+          side,
+          candidate: json,
+        }).catch((e) => console.error(`${LOG_PREFIX} addIceCandidate failed:`, e));
+      } else {
+        console.log(`${LOG_PREFIX} Buffering ICE candidate (${side}), callId not yet set`);
+        pendingCandidatesRef.current.push({ side, json });
+      }
+    },
+    [addIceCandidateMutation],
+  );
+
+  // Cleanup helper.
   const cleanup = useCallback(() => {
-    if (cleanedRef.current) return;
+    if (cleanedRef.current) {
+      console.log(`${LOG_PREFIX} Cleanup already ran, skipping`);
+      return;
+    }
     cleanedRef.current = true;
+    console.log(`${LOG_PREFIX} Running cleanup`);
 
     if (ringTimeoutRef.current) {
       clearTimeout(ringTimeoutRef.current);
@@ -111,54 +150,80 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
       peerCallRef.current = null;
     }
     iceCandidatesSeenRef.current.clear();
+    pendingCandidatesRef.current = [];
+    answerAppliedRef.current = false;
     callIdRef.current = null;
   }, []);
 
-  // Leave / end the call — declared early so it can be used in callbacks below.
+  // Leave / end the call.
   const leave = useCallback(
     async (reason: string = "left") => {
-      if (!callId) return;
+      const id = callIdRef.current;
+      if (!id) {
+        console.log(`${LOG_PREFIX} leave() called but no callId, ignoring`);
+        return;
+      }
+      console.log(`${LOG_PREFIX} leave() called with reason: ${reason}, callId: ${id}`);
 
       try {
         await Promise.race([
-          endCallMutation({ callId, reason }),
+          endCallMutation({ callId: id, reason }),
           new Promise<void>((resolve) => setTimeout(resolve, LEAVE_TIMEOUT_MS)),
         ]);
+        console.log(`${LOG_PREFIX} endCall mutation succeeded`);
       } catch (e) {
-        console.error("endCall failed:", e);
+        console.error(`${LOG_PREFIX} endCall failed:`, e);
       }
 
       setStatus("ended");
       cleanup();
     },
-    [callId, endCallMutation, cleanup],
+    [endCallMutation, cleanup],
   );
 
-  // Decision D11 auto-reject: if an incoming call arrives while status !== idle,
+  // Decision D11 auto-reject: if an incoming call arrives while already in a call,
   // auto-reject immediately (no toast shown).
   useEffect(() => {
     if (incomingCallDoc && status !== "idle" && status !== "ringing") {
+      console.log(
+        `${LOG_PREFIX} Auto-rejecting incoming call ${incomingCallDoc._id} (status: ${status})`,
+      );
       rejectCallMutation({ callId: incomingCallDoc._id }).catch((e) =>
-        console.error("auto-reject failed:", e),
+        console.error(`${LOG_PREFIX} auto-reject failed:`, e),
       );
     }
   }, [incomingCallDoc, status, rejectCallMutation]);
 
   // Subscribe to the call doc for state transitions + ICE trickle.
   useEffect(() => {
-    if (!callDoc || !peerCallRef.current) return;
+    if (!callDoc || !peerCallRef.current) {
+      if (callDoc) {
+        console.log(`${LOG_PREFIX} callDoc updated but peerCallRef is null, skipping effect`);
+      }
+      return;
+    }
 
     const pc = peerCallRef.current;
+    const isCaller = callDoc.callerId === myUserId;
 
-    // Caller: on answerSdp arriving (status → accepted), set remote description.
-    if (callDoc.answerSdp && callDoc.status === "accepted") {
+    console.log(`${LOG_PREFIX} callDoc effect: status=${callDoc.status}, isCaller=${isCaller}`);
+
+    // ONLY the caller applies the remote answer. The callee already set the
+    // remote offer in startCallee — applying the answer would throw.
+    if (
+      isCaller &&
+      !answerAppliedRef.current &&
+      callDoc.answerSdp &&
+      callDoc.status === "accepted"
+    ) {
+      console.log(`${LOG_PREFIX} Applying remote answer (caller)`);
+      answerAppliedRef.current = true;
       pc.setRemoteAnswer(callDoc.answerSdp).catch((e) =>
-        console.error("setRemoteAnswer failed:", e),
+        console.error(`${LOG_PREFIX} setRemoteAnswer failed:`, e),
       );
     }
 
-    // ICE trickle — dedup by candidate.candidate string.
-    const isCaller = callDoc.callerId === myUserId;
+    // ICE trickle — dedup by candidate string.
     const remoteIceCandidates = isCaller
       ? callDoc.calleeIceCandidates
       : callDoc.callerIceCandidates;
@@ -166,19 +231,23 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
     for (const candidateJson of remoteIceCandidates) {
       if (iceCandidatesSeenRef.current.has(candidateJson)) continue;
       iceCandidatesSeenRef.current.add(candidateJson);
+      console.log(
+        `${LOG_PREFIX} Processing remote ICE candidate (${isCaller ? "callee" : "caller"})`,
+      );
 
       try {
         const candidate = JSON.parse(candidateJson) as RTCIceCandidateInit;
         pc.addRemoteIceCandidate(candidate).catch((e) =>
-          console.error("addRemoteIceCandidate failed:", e),
+          console.error(`${LOG_PREFIX} addRemoteIceCandidate failed:`, e),
         );
       } catch (e) {
-        console.error("Failed to parse ICE candidate:", e);
+        console.error(`${LOG_PREFIX} Failed to parse ICE candidate:`, e);
       }
     }
 
-    // Status transitions — derive from callDoc.
+    // Status transitions.
     if (callDoc.status === "accepted" && status !== "connected") {
+      console.log(`${LOG_PREFIX} Call accepted, transitioning to connected`);
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setStatus("connected");
       if (ringTimeoutRef.current) {
@@ -190,6 +259,7 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
       callDoc.status === "rejected" ||
       callDoc.status === "missed"
     ) {
+      console.log(`${LOG_PREFIX} Call ended/rejected/missed, transitioning to ended`);
       setStatus("ended");
       cleanup();
     }
@@ -200,60 +270,76 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
     peerUserId: Id<"users">,
     peerProfile: { displayName: string | null; username: string; avatarUrl: string },
   ) => {
-    if (!myUserId || status !== "idle") return;
+    if (!myUserId || status !== "idle") {
+      console.log(`${LOG_PREFIX} startCall blocked: myUserId=${myUserId}, status=${status}`);
+      return;
+    }
 
+    console.log(`${LOG_PREFIX} startCall initiated with peer:`, peerUserId);
     setStatus("initiating");
     setPeerUserId(peerUserId);
     setPeerProfile(peerProfile);
     cleanedRef.current = false;
+    answerAppliedRef.current = false;
 
     try {
+      // Create the call doc FIRST so callIdRef is set before ICE candidates arrive.
+      // We use a placeholder offerSdp; the real one is set after createOffer.
+      console.log(`${LOG_PREFIX} Creating PeerCall (getUserMedia)...`);
       const pc = await PeerCall.create({
-        onIceCandidate: (candidate) => {
-          if (callIdRef.current) {
-            addIceCandidateMutation({
-              callId: callIdRef.current,
-              side: "caller",
-              candidate: JSON.stringify(candidate),
-            }).catch((e) => console.error("addIceCandidate failed:", e));
-          }
-        },
+        onIceCandidate: (candidate) => sendIceCandidate("caller", candidate),
         onRemoteStream: (stream) => {
+          console.log(`${LOG_PREFIX} Remote stream received (caller), attaching to audio element`);
           if (audioRef.current) {
             audioRef.current.srcObject = stream;
-            audioRef.current.play().catch((e) => console.error("audio play failed:", e));
+            audioRef.current
+              .play()
+              .catch((e) => console.error(`${LOG_PREFIX} audio play failed:`, e));
           }
         },
         onConnectionStateChange: (state) => {
-          if (state === "failed" || state === "disconnected") {
+          console.log(`${LOG_PREFIX} Caller connection state:`, state);
+          // Only leave on "failed" — "disconnected" is transient during ICE negotiation.
+          if (state === "failed") {
+            console.log(`${LOG_PREFIX} Connection failed, calling leave("error")`);
             leave("error");
           }
         },
-        onIceConnectionStateChange: () => {},
+        onIceConnectionStateChange: (state) => {
+          console.log(`${LOG_PREFIX} Caller ICE connection state:`, state);
+        },
       });
 
       peerCallRef.current = pc;
+      console.log(`${LOG_PREFIX} PeerCall created, creating offer...`);
       const offerSdp = await pc.startCaller();
+      console.log(`${LOG_PREFIX} Offer created, calling startCall mutation...`);
 
       const newCallId = await startCallMutation({
         callerId: myUserId,
         calleeId: peerUserId,
         offerSdp,
       });
+      console.log(`${LOG_PREFIX} startCall mutation succeeded, callId:`, newCallId);
 
       callIdRef.current = newCallId;
       setCallId(newCallId);
 
+      // Flush any ICE candidates that arrived during offer creation.
+      flushPendingCandidates();
+
       // Ring timeout — 30s → markMissed.
+      console.log(`${LOG_PREFIX} Setting 30s ring timeout`);
       ringTimeoutRef.current = setTimeout(() => {
+        console.log(`${LOG_PREFIX} Ring timeout fired, calling markMissed`);
         markMissedMutation({ callId: newCallId }).catch((e) =>
-          console.error("markMissed failed:", e),
+          console.error(`${LOG_PREFIX} markMissed failed:`, e),
         );
         setStatus("ended");
         cleanup();
       }, RING_TIMEOUT_MS);
     } catch (e) {
-      console.error("startCall failed:", e);
+      console.error(`${LOG_PREFIX} startCall failed:`, e);
       setStatus("ended");
       cleanup();
     }
@@ -261,50 +347,66 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
 
   // Accept an incoming call (callee path).
   const accept = async () => {
-    if (!myUserId || !incomingCallDoc || status !== "idle") return;
+    if (!myUserId || !incomingCallDoc || status !== "idle") {
+      console.log(
+        `${LOG_PREFIX} accept blocked: myUserId=${myUserId}, incomingCallDoc=${!!incomingCallDoc}, status=${status}`,
+      );
+      return;
+    }
 
+    console.log(`${LOG_PREFIX} accept initiated, callId:`, incomingCallDoc._id);
     setStatus("ringing");
     setPeerUserId(incomingCallDoc.callerId);
     setPeerProfile(incomingCallDoc.caller);
     cleanedRef.current = false;
+    answerAppliedRef.current = false;
+
+    // Set callIdRef BEFORE creating the answer so ICE candidates are buffered/sent.
+    callIdRef.current = incomingCallDoc._id;
+    setCallId(incomingCallDoc._id);
 
     try {
+      console.log(`${LOG_PREFIX} Creating PeerCall for callee (getUserMedia)...`);
       const pc = await PeerCall.create({
-        onIceCandidate: (candidate) => {
-          if (callIdRef.current) {
-            addIceCandidateMutation({
-              callId: callIdRef.current,
-              side: "callee",
-              candidate: JSON.stringify(candidate),
-            }).catch((e) => console.error("addIceCandidate failed:", e));
-          }
-        },
+        onIceCandidate: (candidate) => sendIceCandidate("callee", candidate),
         onRemoteStream: (stream) => {
+          console.log(`${LOG_PREFIX} Remote stream received (callee), attaching to audio element`);
           if (audioRef.current) {
             audioRef.current.srcObject = stream;
-            audioRef.current.play().catch((e) => console.error("audio play failed:", e));
+            audioRef.current
+              .play()
+              .catch((e) => console.error(`${LOG_PREFIX} audio play failed:`, e));
           }
         },
         onConnectionStateChange: (state) => {
-          if (state === "failed" || state === "disconnected") {
+          console.log(`${LOG_PREFIX} Callee connection state:`, state);
+          if (state === "failed") {
+            console.log(`${LOG_PREFIX} Connection failed, calling leave("error")`);
             leave("error");
           }
         },
-        onIceConnectionStateChange: () => {},
+        onIceConnectionStateChange: (state) => {
+          console.log(`${LOG_PREFIX} Callee ICE connection state:`, state);
+        },
       });
 
       peerCallRef.current = pc;
+      console.log(`${LOG_PREFIX} PeerCall created, creating answer...`);
       const answerSdp = await pc.startCallee(incomingCallDoc.offerSdp);
+      console.log(`${LOG_PREFIX} Answer created, calling answerCall mutation...`);
 
       await answerCallMutation({
         callId: incomingCallDoc._id,
         answerSdp,
       });
+      console.log(`${LOG_PREFIX} answerCall mutation succeeded`);
 
-      callIdRef.current = incomingCallDoc._id;
-      setCallId(incomingCallDoc._id);
+      // Flush any ICE candidates that arrived during answer creation.
+      flushPendingCandidates();
     } catch (e) {
-      console.error("accept failed:", e);
+      console.error(`${LOG_PREFIX} accept failed:`, e);
+      callIdRef.current = null;
+      setCallId(null);
       setStatus("ended");
       cleanup();
     }
@@ -313,6 +415,7 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
   // Reject an incoming call.
   const reject = async () => {
     if (!incomingCallDoc) return;
+    console.log(`${LOG_PREFIX} reject called, callId:`, incomingCallDoc._id);
     await rejectCallMutation({ callId: incomingCallDoc._id });
     setStatus("ended");
   };
@@ -331,19 +434,32 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
     }
   };
 
-  // Cleanup on unmount.
+  // Cleanup on unmount — only fires on actual component unmount, not on status changes.
+  // Uses statusRef to check current status at cleanup time (not captured in closure).
   useEffect(() => {
+    console.log(
+      `${LOG_PREFIX} [UNMOUNT-EFFECT] Registered (will only run cleanup on actual unmount)`,
+    );
     return () => {
-      if (status !== "idle" && status !== "ended") {
+      console.log(
+        `${LOG_PREFIX} [UNMOUNT-EFFECT] Cleanup firing (actual unmount), current status=${statusRef.current}`,
+      );
+      if (statusRef.current !== "idle" && statusRef.current !== "ended") {
+        console.log(
+          `${LOG_PREFIX} [UNMOUNT-EFFECT] Status is ${statusRef.current}, calling leave()`,
+        );
         leave();
       }
     };
-  }, [status, leave]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Reset state when status becomes ended.
   useEffect(() => {
     if (status === "ended") {
+      console.log(`${LOG_PREFIX} Status is ended, scheduling reset to idle in 500ms`);
       const timer = setTimeout(() => {
+        console.log(`${LOG_PREFIX} Resetting state to idle`);
         setStatus("idle");
         setCallId(null);
         setPeerUserId(null);
