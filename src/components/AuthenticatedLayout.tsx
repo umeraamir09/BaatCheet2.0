@@ -1,16 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import { usePresence } from "../hooks/usePresence";
+import { useCall } from "../hooks/useCall";
 import { PresenceSidebar } from "./PresenceSidebar";
 import { DMThread, EmptyDMState, type PeerProfile } from "./DMThread";
+import { LobbyThread } from "./LobbyThread";
+import { IconRail } from "./IconRail";
+import { IncomingCallToast } from "./call/IncomingCallToast";
+import { CallControls } from "./call/CallControls";
 import type { User } from "../auth";
 
 const SIDEBAR_COLLAPSED_KEY = "baatcheet.sidebar.collapsed";
 /** Persisted last-opened DM (a UI pref — an id, not a credential). */
 const ACTIVE_DM_KEY = "baatcheet.dm.activeConversationId";
+/** Persisted view mode (a UI pref — "lobby" or "dms", not a credential). */
+const VIEW_MODE_KEY = "baatcheet.viewmode";
 
 interface AuthenticatedLayoutProps {
   user: User;
@@ -18,20 +25,31 @@ interface AuthenticatedLayoutProps {
 }
 
 /**
- * Phase-3 layout: collapsible left sidebar (DM-selectable) + DM thread main
- * pane (Decision D2 — 2-pane, no icon rail). Owns the Phase-2 `usePresence`
- * instance, the sidebar collapse state, the active-DM state (lifted here so
- * the sidebar + main pane share it), and the Tauri `onCloseRequested` teardown.
+ * Phase-5 layout: icon rail + collapsible sidebar + main pane (lobby or DM).
+ *
+ * Owns the Phase-2 `usePresence` instance, the sidebar collapse state, the
+ * active-DM state, the view-mode state (Decision D3/D10 — "lobby" or "dms"),
+ * the lobby auto-creation (Decision D6), and the Tauri `onCloseRequested`
+ * teardown. The floating call overlay persists across view-mode switches
+ * (Decision D8 — a 1:1 call is independent of the active view).
  *
  * Active DM persistence: the last-opened `conversationId` is stored in
- * localStorage so a relaunch lands on the same DM (task 5.3). On logout the
- * key is cleared (no cross-user leakage). On mount, the restored id is
- * validated once against `listMyDMs` (covers a stale id from a crashed
- * session or a different user on the same install).
+ * localStorage so a relaunch lands on the same DM. On logout both the DM
+ * pref and the view-mode pref are cleared (no cross-user leakage).
  */
 export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps) {
   const presence = usePresence(user.id);
+  const call = useCall(presence.userId);
   const getOrCreateDM = useMutation(api.conversations.getOrCreateDM);
+
+  // Phase 5 — Lobby auto-creation (Decision D6).
+  const getOrCreateLobby = useMutation(api.lobby.getOrCreateLobby);
+  const lobbyDoc = useQuery(api.lobby.getLobby, {});
+  const lobbyCreatedRef = useRef(false);
+
+  // Reactive presence list — used to check if the active peer is online (Phase 4 D11)
+  // and to compute the lobby online count (Phase 5).
+  const presenceListRaw = useQuery(api.presence.listPresence, {});
 
   // Reactive DM list — used for the active-peer profile + restore validation.
   // Deduped with PresenceSidebar's own `listMyDMs` subscription by the Convex
@@ -69,6 +87,15 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
     }
   });
 
+  // Phase 5 — View mode state (Decision D10). Default "lobby" on fresh login.
+  const [viewMode, setViewMode] = useState<"lobby" | "dms">(() => {
+    try {
+      return (localStorage.getItem(VIEW_MODE_KEY) as "lobby" | "dms") ?? "lobby";
+    } catch {
+      return "lobby";
+    }
+  });
+
   const toggleCollapse = useCallback(() => {
     setCollapsed((prev) => {
       const next = !prev;
@@ -80,6 +107,33 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       return next;
     });
   }, []);
+
+  // Phase 5 — View mode persistence (Decision D10).
+  const setViewModePersisted = useCallback((mode: "lobby" | "dms") => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, mode);
+    } catch {
+      // localStorage may be unavailable — non-fatal.
+    }
+  }, []);
+
+  // Phase 5 — Lobby auto-creation (Decision D6). Fires once per session when
+  // presence.userId becomes available. Ref-guarded so re-renders don't re-call.
+  useEffect(() => {
+    if (presence.userId && !lobbyCreatedRef.current) {
+      lobbyCreatedRef.current = true;
+      getOrCreateLobby({ userId: presence.userId }).catch((e) =>
+        console.error("getOrCreateLobby failed:", e),
+      );
+    }
+  }, [presence.userId, getOrCreateLobby]);
+
+  // Phase 5 — Online count for the lobby header. Includes all online users
+  // (including self — group-size-online count for the shared space).
+  const onlineCount = useMemo(() => {
+    return (presenceListRaw ?? []).filter((p) => p.online).length;
+  }, [presenceListRaw]);
 
   // Validate a RESTORED (untrusted) id in render: show it only while myDMs is
   // still loading (optimistic) OR once myDMs confirms the user is a
@@ -112,13 +166,38 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
     return dm?.peerUserId ?? null;
   }, [activePeerUserId, myDMsQuery, effectiveConversationId]);
 
-  // Click a friend row → open/create the DM.
+  // Phase 4 — Check if the active peer is online (Decision D11).
+  const peerOnline = useMemo(() => {
+    if (!effectivePeerUserId) return false;
+    const list = presenceListRaw ?? [];
+    const peerPresence = list.find((p) => p.userId === effectivePeerUserId);
+    return peerPresence?.online ?? false;
+  }, [effectivePeerUserId, presenceListRaw]);
+
+  // Phase 4 — Check if a call is active with the current peer.
+  const callActiveWithPeer = useMemo(() => {
+    return (
+      call.status !== "idle" && call.status !== "ended" && call.peerUserId === effectivePeerUserId
+    );
+  }, [call.status, call.peerUserId, effectivePeerUserId]);
+
+  // Phase 4 — Start a call with the active peer (Decision D12).
+  const startCallWithPeer = useCallback(
+    (peerUserId: Id<"users">, peerProfile: PeerProfile) => {
+      call.startCall(peerUserId, peerProfile);
+    },
+    [call],
+  );
+
+  // Click a friend row → open/create the DM. Phase 5: also switches to "dms"
+  // view mode (Decision D3 — cross-navigation from any view).
   const selectPeer = useCallback(
     async (peerUserId: Id<"users">, peerProfile: PeerProfile | null) => {
       if (!presence.userId) return;
       setActivePeerUserId(peerUserId);
       setPendingPeerProfile(peerProfile);
       setTrusted(true);
+      setViewModePersisted("dms");
       try {
         const convId = await getOrCreateDM({
           userIdA: presence.userId,
@@ -134,10 +213,11 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
         console.error("getOrCreateDM failed:", e);
       }
     },
-    [presence.userId, getOrCreateDM],
+    [presence.userId, getOrCreateDM, setViewModePersisted],
   );
 
-  // Click a DM row → select an existing conversation.
+  // Click a DM row → select an existing conversation. Phase 5: also switches
+  // to "dms" view mode (Decision D3 — cross-navigation).
   const selectDM = useCallback(
     (
       conversationId: Id<"conversations">,
@@ -148,48 +228,78 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       setActivePeerUserId(peerUserId);
       setPendingPeerProfile(peerProfile);
       setTrusted(true);
+      setViewModePersisted("dms");
       try {
         localStorage.setItem(ACTIVE_DM_KEY, conversationId);
       } catch {
         // non-fatal
       }
     },
-    [],
+    [setViewModePersisted],
   );
 
-  // Logout: stop heartbeat + setOffline BEFORE clearing tokens; clear the DM
-  // pref so a different user doesn't land on the previous user's thread.
+  // Logout: end any active call FIRST (Phase 4 teardown ordering), then stop
+  // heartbeat + setOffline BEFORE clearing tokens; clear the DM pref AND
+  // view-mode pref so a different user doesn't land on the previous user's
+  // thread or view mode.
   const handleLogout = useCallback(async () => {
+    // Phase 4 — End any active call before going offline.
+    if (call.status !== "idle" && call.status !== "ended") {
+      await call.leave("left");
+    }
     await presence.goOffline();
     try {
       localStorage.removeItem(ACTIVE_DM_KEY);
+      localStorage.removeItem(VIEW_MODE_KEY);
     } catch {
       // non-fatal
     }
     await onLogout();
-  }, [presence, onLogout]);
+  }, [call, presence, onLogout]);
 
-  // Tauri window close-requested → fire goOffline before destroying the
-  // window. Backstop: the TTL sweep (30–35s) if the mutation doesn't land.
+  // Tauri window close-requested → end any active call FIRST (Phase 4 teardown
+  // ordering), then fire goOffline before destroying the window. Backstop: the
+  // TTL sweep (30–35s) if the mutation doesn't land.
   useEffect(() => {
     const win = getCurrentWindow();
     const unlistenP = win.onCloseRequested(async (event) => {
       event.preventDefault();
+      console.log("[AuthenticatedLayout] onCloseRequested fired, starting teardown...");
       try {
-        await presence.goOffline();
+        // Phase 4 — End any active call before going offline.
+        if (call.status !== "idle" && call.status !== "ended") {
+          console.log("[AuthenticatedLayout] Ending active call before close...");
+          await Promise.race([
+            call.leave("left"),
+            new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+          ]);
+        }
+        console.log("[AuthenticatedLayout] Setting presence offline...");
+        await Promise.race([
+          presence.goOffline(),
+          new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+        ]);
       } catch (e) {
-        console.error("window close goOffline failed:", e);
+        console.error("[AuthenticatedLayout] window close teardown failed:", e);
       } finally {
-        await win.destroy();
+        console.log("[AuthenticatedLayout] Destroying window...");
+        try {
+          await win.destroy();
+        } catch (e) {
+          console.error("[AuthenticatedLayout] win.destroy() failed:", e);
+        }
       }
     });
     return () => {
       unlistenP.then((fn) => fn()).catch(() => {});
     };
-  }, [presence]);
+  }, [call, presence]);
 
   return (
     <div className="flex h-screen bg-discord-bg text-white">
+      {/* Phase 5 — Icon rail (Decision D3). Leftmost element, always visible. */}
+      <IconRail viewMode={viewMode} onSelect={setViewModePersisted} />
+
       <PresenceSidebar
         presence={presence}
         collapsed={collapsed}
@@ -202,16 +312,62 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
         onSelectDM={selectDM}
       />
       <main className="flex flex-1 flex-col">
-        {effectiveConversationId && presence.userId ? (
+        {viewMode === "lobby" ? (
+          lobbyDoc && presence.userId ? (
+            <LobbyThread
+              conversationId={lobbyDoc._id}
+              myUserId={presence.userId}
+              onlineCount={onlineCount}
+            />
+          ) : (
+            <LobbyLoadingState />
+          )
+        ) : effectiveConversationId && presence.userId ? (
           <DMThread
             conversationId={effectiveConversationId}
             myUserId={presence.userId}
             peerProfile={activePeerProfile}
+            peerUserId={effectivePeerUserId}
+            peerOnline={peerOnline}
+            startCallWithPeer={startCallWithPeer}
+            callActiveWithPeer={callActiveWithPeer}
           />
         ) : (
           <EmptyDMState />
         )}
       </main>
+
+      {/* Phase 4 — Incoming call toast (Decision D6, D12). Persists across view modes. */}
+      {call.incomingCall && (
+        <IncomingCallToast
+          caller={call.incomingCall.caller}
+          onAccept={call.accept}
+          onDecline={call.reject}
+        />
+      )}
+
+      {/* Phase 4 — Floating call controls (Decision D12). Persists across view modes. */}
+      {call.status !== "idle" && call.status !== "ended" && (
+        <CallControls
+          status={call.status}
+          peerProfile={call.peerProfile}
+          muted={call.muted}
+          deafened={call.deafened}
+          onMute={call.setMuted}
+          onDeafen={call.setDeafened}
+          onLeave={() => call.leave("left")}
+          audioRef={call.audioRef}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Loading state while the lobby doc is being created / reactively loading. */
+function LobbyLoadingState() {
+  return (
+    <div className="flex h-full flex-1 items-center justify-center bg-discord-bg text-white/60">
+      <p className="text-sm">Loading lobby…</p>
     </div>
   );
 }

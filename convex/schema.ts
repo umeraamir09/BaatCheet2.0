@@ -41,6 +41,40 @@ export default defineSchema({
     conversationId: v.id("conversations"),
     senderId: v.id("users"),
     body: v.string(),
+    // Rich messaging — optional fields (backward-compatible with existing messages)
+    attachments: v.optional(
+      v.array(
+        v.union(
+          v.object({
+            kind: v.literal("image"),
+            storageId: v.id("_storage"),
+            contentType: v.string(),
+            width: v.union(v.number(), v.null()),
+            height: v.union(v.number(), v.null()),
+          }),
+          v.object({
+            kind: v.literal("gif"),
+            url: v.string(),
+            width: v.union(v.number(), v.null()),
+            height: v.union(v.number(), v.null()),
+            alt: v.union(v.string(), v.null()),
+          }),
+        ),
+      ),
+    ),
+    linkPreview: v.optional(
+      v.union(
+        v.object({
+          url: v.string(),
+          title: v.union(v.string(), v.null()),
+          description: v.union(v.string(), v.null()),
+          imageUrl: v.union(v.string(), v.null()),
+          siteName: v.union(v.string(), v.null()),
+          fetchedAt: v.number(),
+        }),
+        v.null(),
+      ),
+    ),
     createdAt: v.number(),
   }).index("byConversation", ["conversationId", "createdAt"]), // ordered history
   // Phase 3 — Typing indicators (Decision D3). No cron: stale docs are
@@ -50,4 +84,24 @@ export default defineSchema({
     userId: v.id("users"),
     lastTyped: v.number(),
   }).index("byConversation", ["conversationId"]),
+  // Phase 4 — 1:1 voice (Decisions D1, D3). A `calls` doc is the single
+  // source of truth for call state — both sides subscribe via `getCall(callId)`.
+  // Signaling (SDP offer/answer + trickled ICE) flows through Convex (D1).
+  // Status transitions are idempotent (guard on current status) so concurrent
+  // ends from both sides don't double-transition.
+  calls: defineTable({
+    callerId: v.id("users"),
+    calleeId: v.id("users"),
+    status: v.string(), // "calling" | "accepted" | "rejected" | "ended" | "missed"
+    offerSdp: v.string(),
+    answerSdp: v.union(v.string(), v.null()),
+    callerIceCandidates: v.array(v.string()), // JSON-encoded RTCIceCandidateInit
+    calleeIceCandidates: v.array(v.string()),
+    startedAt: v.number(),
+    connectedAt: v.union(v.number(), v.null()),
+    endedAt: v.union(v.number(), v.null()),
+    endReason: v.union(v.string(), v.null()),
+  })
+    .index("byCallee", ["calleeId", "startedAt"]) // incoming-call toast subscription
+    .index("byCaller", ["callerId", "startedAt"]),
 });

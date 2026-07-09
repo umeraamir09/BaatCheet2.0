@@ -5,7 +5,8 @@ import { useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { startDiscordLogin, getCurrentSession, User } from "../auth";
 
-export type AuthStatus = "loading" | "idle" | "starting" | "waiting-callback" | "success" | "rejected" | "failed";
+export type AuthStatus =
+  "loading" | "idle" | "starting" | "waiting-callback" | "success" | "rejected" | "failed";
 
 export function useAuth() {
   const [status, setStatus] = useState<AuthStatus>("loading");
@@ -15,9 +16,14 @@ export function useAuth() {
 
   // TG5: restore session on cold start.
   useEffect(() => {
+    console.log("[useAuth] Attempting session restore...");
     getCurrentSession()
       .then((u) => {
         if (u) {
+          console.log("[useAuth] Session restored successfully:", {
+            id: u.id,
+            username: u.username,
+          });
           setUser(u);
           setStatus("success");
           // Upsert to sync any profile changes since last login.
@@ -26,13 +32,14 @@ export function useAuth() {
             username: u.username,
             displayName: u.displayName,
             avatarUrl: u.avatarUrl,
-          }).catch((e) => console.error("Convex upsertUser failed:", e));
+          }).catch((e) => console.error("[useAuth] Convex upsertUser failed:", e));
         } else {
+          console.log("[useAuth] No session found, user needs to login");
           setStatus("idle");
         }
       })
       .catch((e) => {
-        console.error("Session restore failed:", e);
+        console.error("[useAuth] Session restore failed:", e);
         setStatus("idle");
       });
   }, [upsertUser]);

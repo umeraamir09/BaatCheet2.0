@@ -4,7 +4,14 @@ import { AuthenticatedLayout } from "./components/AuthenticatedLayout";
 function App() {
   const { status, user, error, login, logout } = useAuth();
 
-  console.log("[App] render — status:", status, "user:", user ? { id: user.id, username: user.username } : null, "error:", error);
+  console.log(
+    "[App] render — status:",
+    status,
+    "user:",
+    user ? { id: user.id, username: user.username } : null,
+    "error:",
+    error,
+  );
 
   if (status === "loading") {
     return (
@@ -42,9 +49,7 @@ function App() {
       />
       <div className="flex flex-col items-center gap-1">
         <h1 className="text-4xl font-bold tracking-tight">BaatCheet</h1>
-        <p className="text-xs uppercase tracking-[0.2em] text-white/50">
-          by Umroo Productions
-        </p>
+        <p className="text-xs uppercase tracking-[0.2em] text-white/50">by Umroo Productions</p>
       </div>
       <button
         onClick={login}

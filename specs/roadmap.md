@@ -39,17 +39,30 @@ High-level implementation order, broken into small, independently-reviewable pha
 - **DoD:** send a message from client A → appears on client B live; reopening the DM shows full history.
 
 ## Phase 4 — 1:1 voice (direct WebRTC)
+> **STATUS: COMPLETE** — Implementation complete. Automated gates green (lint, typecheck, `bun tauri build`, Convex schema deploy). Manual smokes (two-client live call A→B with toast + accept + two-way audio, mute/deafen round-trip, either-side leave, reject path, busy/offline handling, coturn TURN fallback across NAT) pending user run with a second Discord account.
 **Goal:** smaller surface area than group voice — good place to learn the WebRTC API.
 - Peer-to-peer WebRTC call between two friends; coturn as TURN fallback.
 - Call UI: incoming call toast, accept/decline, mute, deafen, leave.
 - **DoD:** A calls B → B sees toast → accept → two-way audio works → either side can mute/deafen/leave cleanly.
 
 ## Phase 5 — Hangout lobby (text half)
+> **STATUS: COMPLETE** — Implementation complete. Automated gates green (lint, typecheck, `bun tauri build`, Convex codegen). `git diff convex/schema.ts` is empty (Decision D1 — zero schema change). Manual smokes (post-to-lobby-live, history-persists, multi-person typing, navigation round-trip + view-mode persistence, no-regression in Phase 2/3/4) pending user run with a second Discord account.
 **Goal:** the group text half of the centerpiece, cheaply — reuses DM components.
 - Single shared "room" (not per-channel) for the whole group.
 - DM chat components from Phase 3 retargeted at the shared room.
 - Always-on, persisted history.
 - **DoD:** any group member posts to the lobby → all members see it live; history persists across restarts.
+
+## Rich messaging (images, links, emojis, GIFs)
+> **STATUS: COMPLETE** — Implementation complete. Automated gates green (lint, typecheck, `bun tauri build`, Convex schema deploy). Manual smokes (image send/receive, link preview cards, emoji picker, GIF picker, no-regression) pending user run with a second Discord account.
+
+**Goal:** extend text chat with standard messaging features — image uploads, clickable links with OG preview cards, Apple-style emoji picker, GIPHY-powered GIF picker.
+- Image uploads via Convex file storage (`generateUploadUrl` + direct POST).
+- Link previews fetched server-side via Convex action (OG metadata), rendered as Discord-style cards.
+- Apple-style emoji picker via `@emoji-mart/react` with `set="apple"`.
+- GIF picker via raw GIPHY API calls (no SDK dependency).
+- All features work in both DM and lobby threads.
+- **DoD:** send an image → renders in bubble; send a URL → preview card appears; use emoji picker → emoji inserted; search + send a GIF → GIF renders in bubble.
 
 ## Phase 6 — Hangout lobby (group voice via LiveKit)
 **Goal:** the infra-heavy half of the centerpiece; saved for when the rest already works.
