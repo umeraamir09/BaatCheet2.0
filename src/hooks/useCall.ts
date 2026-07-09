@@ -22,6 +22,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import { PeerCall } from "../webrtc/peerConnection";
+import { playJoinSound, playLeaveSound, unlockAudio } from "../lib/soundEffects";
 
 const LOG_PREFIX = "[useCall]";
 
@@ -165,6 +166,10 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
       }
       console.log(`${LOG_PREFIX} leave() called with reason: ${reason}, callId: ${id}`);
 
+      if (statusRef.current === "connected") {
+        playLeaveSound();
+      }
+
       try {
         await Promise.race([
           endCallMutation({ callId: id, reason }),
@@ -248,6 +253,7 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
     // Status transitions.
     if (callDoc.status === "accepted" && status !== "connected") {
       console.log(`${LOG_PREFIX} Call accepted, transitioning to connected`);
+      playJoinSound();
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setStatus("connected");
       if (ringTimeoutRef.current) {
@@ -259,7 +265,13 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
       callDoc.status === "rejected" ||
       callDoc.status === "missed"
     ) {
-      console.log(`${LOG_PREFIX} Call ended/rejected/missed, transitioning to ended`);
+      const wasConnected = statusRef.current === "connected";
+      console.log(
+        `${LOG_PREFIX} Call ended/rejected/missed, transitioning to ended (wasConnected=${wasConnected})`,
+      );
+      if (wasConnected) {
+        playLeaveSound();
+      }
       setStatus("ended");
       cleanup();
     }
@@ -280,6 +292,9 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
     setPeerUserId(peerUserId);
     setPeerProfile(peerProfile);
     cleanedRef.current = false;
+
+    // Unlock audio context during the user gesture so subsequent sounds can play.
+    await unlockAudio();
     answerAppliedRef.current = false;
 
     try {
@@ -360,6 +375,9 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
     setPeerProfile(incomingCallDoc.caller);
     cleanedRef.current = false;
     answerAppliedRef.current = false;
+
+    // Unlock audio context during the user gesture so subsequent sounds can play.
+    await unlockAudio();
 
     // Set callIdRef BEFORE creating the answer so ICE candidates are buffered/sent.
     callIdRef.current = incomingCallDoc._id;
