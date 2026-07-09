@@ -14,19 +14,31 @@ interface LobbyThreadProps {
   conversationId: Id<"conversations">;
   myUserId: Id<"users">;
   onlineCount: number;
+  // Phase 6 — Group voice (Decision D5).
+  voiceStatus: "disconnected" | "connecting" | "connected";
+  onJoinVoice: () => void;
+  onLeaveVoice: () => void;
 }
 
 /**
- * The group lobby text thread (Phase 5 + Rich messaging).
+ * The group lobby text thread (Phase 5 + Rich messaging + Phase 6 voice button).
  *
  * Reuses `useChatThread` + shared `MessageBubble`/`Composer`. Group-specific
- * UI: "Lobby" header with group icon + online count (no call button — D8),
- * multi-person typing indicator, group-flavored empty state.
+ * UI: "Lobby" header with group icon + online count, multi-person typing
+ * indicator, group-flavored empty state. Phase 6 adds the "Join Voice" /
+ * "Leave Voice" button in the header (Decision D5 — single-click join).
  *
  * Composer supports text, images (Convex file storage), GIFs (GIPHY CDN),
  * emoji picker, and link preview cards.
  */
-export function LobbyThread({ conversationId, myUserId, onlineCount }: LobbyThreadProps) {
+export function LobbyThread({
+  conversationId,
+  myUserId,
+  onlineCount,
+  voiceStatus,
+  onJoinVoice,
+  onLeaveVoice,
+}: LobbyThreadProps) {
   const { messages, typingPeers, send, notifyTyping } = useChatThread(conversationId, myUserId);
 
   const [input, setInput] = useState("");
@@ -73,6 +85,31 @@ export function LobbyThread({ conversationId, myUserId, onlineCount }: LobbyThre
           <p className="truncate font-semibold text-white">Lobby</p>
           <p className="truncate text-xs text-white/60">{onlineCount} online</p>
         </div>
+        {/* Phase 6 — Join/Leave voice button (Decision D5). */}
+        <button
+          onClick={() => (voiceStatus === "connected" ? onLeaveVoice() : onJoinVoice())}
+          disabled={voiceStatus === "connecting"}
+          className={`rounded px-3 py-1.5 text-xs font-medium ${
+            voiceStatus === "connected"
+              ? "bg-green-600 text-white hover:bg-green-700"
+              : voiceStatus === "connecting"
+                ? "cursor-not-allowed bg-white/10 text-white/40"
+                : "bg-discord-blurple text-white hover:bg-discord-blurple-hover"
+          }`}
+          title={
+            voiceStatus === "connected"
+              ? "Leave group voice"
+              : voiceStatus === "connecting"
+                ? "Connecting…"
+                : "Join group voice"
+          }
+        >
+          {voiceStatus === "connected"
+            ? "Leave Voice"
+            : voiceStatus === "connecting"
+              ? "Connecting…"
+              : "Join Voice"}
+        </button>
       </header>
 
       {/* Message list */}

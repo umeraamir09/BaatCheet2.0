@@ -2,7 +2,7 @@
 
 **Stack:** Tauri 2 (Rust) + React 19 / TypeScript / Vite 7 SPA + Tailwind 4 + Convex 1.42 + bun
 
-**Status:** Phase 0 (scaffold), Phase 1 (Discord OAuth2 + PKCE auth), Phase 2 (Presence), Phase 3 (1:1 DM text), Phase 4 (1:1 voice — direct WebRTC), Phase 5 (Hangout lobby — group text half), and Rich messaging (images, links, emojis, GIFs) complete. No CI, no test framework, no frontend tests.
+**Status:** Phase 0 (scaffold), Phase 1 (Discord OAuth2 + PKCE auth), Phase 2 (Presence), Phase 3 (1:1 DM text), Phase 4 (1:1 voice — direct WebRTC), Phase 5 (Hangout lobby — group text half), Phase 6 (Hangout lobby — group voice via LiveKit), and Rich messaging (images, links, emojis, GIFs) complete. No CI; vitest test framework with hook tests (`useCall`, `useGroupVoice`).
 
 ## Commands
 
@@ -28,8 +28,8 @@
 ## Architecture
 
 - **`src-tauri/src/auth/`** — Rust auth module: `oauth.rs` (Discord endpoints), `pkce.rs` (S256 challenge), `profile.rs` (`/users/@me` + avatar URLs), `store.rs` (OS keychain), `session.rs` (flow orchestration + refresh timer)
-- **`src/`** — React frontend: `App.tsx` (auth UI states), `auth.ts` (Tauri invoke wrappers), `hooks/useAuth.ts` (state machine + Tauri event listeners), `hooks/usePresence.ts` (presence lifecycle + heartbeat), `hooks/useChatThread.ts` (shared chat hook — messages + typing + image upload), `hooks/useComposerState.ts` (shared composer state — pending image/GIF/emoji), `hooks/useCall.ts` (1:1 voice state machine), `components/AuthenticatedLayout.tsx` (icon rail + sidebar + main pane — lobby/DM view mode), `components/PresenceSidebar.tsx` (friends/DMs list), `components/DMThread.tsx` (1:1 DM thread), `components/LobbyThread.tsx` (group lobby thread), `components/IconRail.tsx` (lobby/DMs navigation), `components/chat/` (shared `MessageBubble` + `Composer` + `RichContent` + `LinkPreviewCard` + `EmojiPicker` + `GifPicker`), `components/call/` (call overlay — `IncomingCallToast` + `CallControls`), `lib/emoji.ts` (emoji-mart reverse map), `lib/giphy.ts` (GIPHY API client), `webrtc/peerConnection.ts` (raw WebRTC wrapper)
-- **`convex/`** — Convex functions: `users.ts` (upsertUser mutation), `presence.ts` (presence lifecycle + heartbeat + sweep), `conversations.ts` (DM lifecycle + list), `messages.ts` (send + list + attachments + link preview scheduling), `typing.ts` (typing indicators), `calls.ts` (1:1 voice signaling), `lobby.ts` (group lobby getOrCreate + get), `storage.ts` (generateUploadUrl for image uploads), `linkPreviews.ts` (OG metadata fetch action + store mutation), `counter.ts` (scaffold remnant)
+- **`src/`** — React frontend: `App.tsx` (auth UI states), `auth.ts` (Tauri invoke wrappers), `hooks/useAuth.ts` (state machine + Tauri event listeners), `hooks/usePresence.ts` (presence lifecycle + heartbeat), `hooks/useChatThread.ts` (shared chat hook — messages + typing + image upload), `hooks/useComposerState.ts` (shared composer state — pending image/GIF/emoji), `hooks/useCall.ts` (1:1 voice state machine), `hooks/useGroupVoice.ts` (group voice state machine — LiveKit Room lifecycle + roster + mute/deafen), `components/AuthenticatedLayout.tsx` (icon rail + sidebar + main pane — lobby/DM view mode + side-by-side voice layout + mutual exclusivity), `components/PresenceSidebar.tsx` (friends/DMs list), `components/DMThread.tsx` (1:1 DM thread), `components/LobbyThread.tsx` (group lobby thread + Join Voice button), `components/IconRail.tsx` (lobby/DMs navigation), `components/chat/` (shared `MessageBubble` + `Composer` + `RichContent` + `LinkPreviewCard` + `EmojiPicker` + `GifPicker`), `components/call/` (1:1 call overlay — `IncomingCallToast` + `CallControls`), `components/voice/` (group voice — `VoiceStage`), `lib/emoji.ts` (emoji-mart reverse map), `lib/giphy.ts` (GIPHY API client), `webrtc/peerConnection.ts` (raw WebRTC wrapper)
+- **`convex/`** — Convex functions: `users.ts` (upsertUser mutation), `users_internal.ts` (internal query for user lookup by actions), `presence.ts` (presence lifecycle + heartbeat + sweep), `conversations.ts` (DM lifecycle + list), `messages.ts` (send + list + attachments + link preview scheduling), `typing.ts` (typing indicators), `calls.ts` (1:1 voice signaling), `lobby.ts` (group lobby getOrCreate + get), `storage.ts` (generateUploadUrl for image uploads), `linkPreviews.ts` (OG metadata fetch action + store mutation), `livekit.ts` (LiveKit token mint action — `"use node"` file), `counter.ts` (scaffold remnant)
 - **`specs/`** — Dated phase folders with `requirements.md`, `plan.md`, `validation.md`
 
 ## Auth flow quirks
@@ -46,5 +46,5 @@
 
 - Tauri conventions file, `.prettierignore`, and `.gitignore` each have their own exclusion lists — check before adding paths.
 - Convex `_generated/` is gitignored but imported in source (`../../convex/_generated/api`). Run `bunx convex dev` (or `bunx convex codegen`) after schema changes.
-- Rust unit tests exist in `oauth.rs`, `pkce.rs`, `profile.rs`, `store.rs` (`#[cfg(test)]`). No frontend tests.
+- Rust unit tests exist in `oauth.rs`, `pkce.rs`, `profile.rs`, `store.rs` (`#[cfg(test)]`). Frontend tests exist in `src/hooks/useCall.test.ts` + `src/hooks/useGroupVoice.test.ts` (vitest + @testing-library/react + jsdom).
 - Validation flow (from `specs/`): `bun run lint` → `bun run typecheck` → `bun tauri build` → 4 manual smokes.

@@ -5,12 +5,14 @@ import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import { usePresence } from "../hooks/usePresence";
 import { useCall } from "../hooks/useCall";
+import { useGroupVoice } from "../hooks/useGroupVoice";
 import { PresenceSidebar } from "./PresenceSidebar";
 import { DMThread, EmptyDMState, type PeerProfile } from "./DMThread";
 import { LobbyThread } from "./LobbyThread";
 import { IconRail } from "./IconRail";
 import { IncomingCallToast } from "./call/IncomingCallToast";
 import { CallControls } from "./call/CallControls";
+import { VoiceStage } from "./voice/VoiceStage";
 import type { User } from "../auth";
 
 const SIDEBAR_COLLAPSED_KEY = "baatcheet.sidebar.collapsed";
@@ -25,13 +27,16 @@ interface AuthenticatedLayoutProps {
 }
 
 /**
- * Phase-5 layout: icon rail + collapsible sidebar + main pane (lobby or DM).
+ * Phase-6 layout: icon rail + collapsible sidebar + main pane (lobby or DM).
  *
- * Owns the Phase-2 `usePresence` instance, the sidebar collapse state, the
- * active-DM state, the view-mode state (Decision D3/D10 — "lobby" or "dms"),
- * the lobby auto-creation (Decision D6), and the Tauri `onCloseRequested`
- * teardown. The floating call overlay persists across view-mode switches
- * (Decision D8 — a 1:1 call is independent of the active view).
+ * Owns the Phase-2 `usePresence` instance, the Phase-4 `useCall` (1:1 voice),
+ * the Phase-6 `useGroupVoice` (group voice via LiveKit), the sidebar collapse
+ * state, the active-DM state, the view-mode state (Decision D3/D10 — "lobby"
+ * or "dms"), the lobby auto-creation (Decision D6), and the Tauri
+ * `onCloseRequested` teardown. The floating 1:1 call overlay persists across
+ * view-mode switches (Phase 5 D8). Phase 6 adds: the side-by-side lobby layout
+ * (voice left, text right — Decision D6), mutual exclusivity between 1:1 and
+ * group voice (Decision D9), and group-voice teardown on logout/close (D12).
  *
  * Active DM persistence: the last-opened `conversationId` is stored in
  * localStorage so a relaunch lands on the same DM. On logout both the DM
@@ -40,6 +45,7 @@ interface AuthenticatedLayoutProps {
 export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps) {
   const presence = usePresence(user.id);
   const call = useCall(presence.userId);
+  const groupVoice = useGroupVoice(presence.userId);
   const getOrCreateDM = useMutation(api.conversations.getOrCreateDM);
 
   // Phase 5 — Lobby auto-creation (Decision D6).
@@ -182,12 +188,39 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
   }, [call.status, call.peerUserId, effectivePeerUserId]);
 
   // Phase 4 — Start a call with the active peer (Decision D12).
+  // Phase 6 — Leave group voice first if connected (Decision D9 — mutual exclusivity).
   const startCallWithPeer = useCallback(
-    (peerUserId: Id<"users">, peerProfile: PeerProfile) => {
+    async (peerUserId: Id<"users">, peerProfile: PeerProfile) => {
+      if (groupVoice.connected) {
+        await groupVoice.leave();
+      }
       call.startCall(peerUserId, peerProfile);
     },
-    [call],
+    [call, groupVoice],
   );
+
+  // Phase 6 — Group voice join/leave wrappers (Decision D9 — mutual exclusivity).
+  // joinVoice: leave any active 1:1 call first, then join group voice.
+  const joinVoice = useCallback(async () => {
+    if (call.status !== "idle" && call.status !== "ended") {
+      await call.leave("left");
+    }
+    await groupVoice.join();
+  }, [call, groupVoice]);
+
+  // leaveVoice: leave group voice.
+  const leaveVoice = useCallback(() => {
+    void groupVoice.leave();
+  }, [groupVoice]);
+
+  // Phase 6 — Accept incoming 1:1 call wrapper (Decision D9).
+  // Leave group voice first if connected, then accept the 1:1 call.
+  const acceptCallWithVoiceLeave = useCallback(async () => {
+    if (groupVoice.connected) {
+      await groupVoice.leave();
+    }
+    await call.accept();
+  }, [call, groupVoice]);
 
   // Click a friend row → open/create the DM. Phase 5: also switches to "dms"
   // view mode (Decision D3 — cross-navigation from any view).
@@ -238,12 +271,16 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
     [setViewModePersisted],
   );
 
-  // Logout: end any active call FIRST (Phase 4 teardown ordering), then stop
-  // heartbeat + setOffline BEFORE clearing tokens; clear the DM pref AND
-  // view-mode pref so a different user doesn't land on the previous user's
-  // thread or view mode.
+  // Logout: end any active voice FIRST (Phase 6 group voice → Phase 4 1:1 call
+  // teardown ordering — Decision D12), then stop heartbeat + setOffline BEFORE
+  // clearing tokens; clear the DM pref AND view-mode pref so a different user
+  // doesn't land on the previous user's thread or view mode.
   const handleLogout = useCallback(async () => {
-    // Phase 4 — End any active call before going offline.
+    // Phase 6 — End group voice before 1:1 call.
+    if (groupVoice.connected) {
+      await groupVoice.leave();
+    }
+    // Phase 4 — End any active 1:1 call before going offline.
     if (call.status !== "idle" && call.status !== "ended") {
       await call.leave("left");
     }
@@ -255,20 +292,29 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       // non-fatal
     }
     await onLogout();
-  }, [call, presence, onLogout]);
+  }, [groupVoice, call, presence, onLogout]);
 
-  // Tauri window close-requested → end any active call FIRST (Phase 4 teardown
-  // ordering), then fire goOffline before destroying the window. Backstop: the
-  // TTL sweep (30–35s) if the mutation doesn't land.
+  // Tauri window close-requested → end any active voice FIRST (Phase 6 group
+  // voice → Phase 4 1:1 call teardown ordering — Decision D12), then fire
+  // goOffline before destroying the window. Backstop: the TTL sweep (30–35s)
+  // if the mutation doesn't land.
   useEffect(() => {
     const win = getCurrentWindow();
     const unlistenP = win.onCloseRequested(async (event) => {
       event.preventDefault();
       console.log("[AuthenticatedLayout] onCloseRequested fired, starting teardown...");
       try {
-        // Phase 4 — End any active call before going offline.
+        // Phase 6 — End group voice before 1:1 call.
+        if (groupVoice.connected) {
+          console.log("[AuthenticatedLayout] Ending group voice before close...");
+          await Promise.race([
+            groupVoice.leave(),
+            new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+          ]);
+        }
+        // Phase 4 — End any active 1:1 call before going offline.
         if (call.status !== "idle" && call.status !== "ended") {
-          console.log("[AuthenticatedLayout] Ending active call before close...");
+          console.log("[AuthenticatedLayout] Ending active 1:1 call before close...");
           await Promise.race([
             call.leave("left"),
             new Promise<void>((resolve) => setTimeout(resolve, 3000)),
@@ -293,7 +339,7 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
     return () => {
       unlistenP.then((fn) => fn()).catch(() => {});
     };
-  }, [call, presence]);
+  }, [groupVoice, call, presence]);
 
   return (
     <div className="flex h-screen bg-discord-bg text-white">
@@ -314,11 +360,31 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       <main className="flex flex-1 flex-col">
         {viewMode === "lobby" ? (
           lobbyDoc && presence.userId ? (
-            <LobbyThread
-              conversationId={lobbyDoc._id}
-              myUserId={presence.userId}
-              onlineCount={onlineCount}
-            />
+            // Phase 6 — Side-by-side layout when group voice is active (Decision D6).
+            // VoiceStage (left, fixed width) + LobbyThread (right, flex-1).
+            // When not in voice, full-width LobbyThread (Phase 5 behavior).
+            (groupVoice.connected || groupVoice.connecting) ? (
+              <div className="flex h-full flex-1">
+                <VoiceStage groupVoice={groupVoice} />
+                <LobbyThread
+                  conversationId={lobbyDoc._id}
+                  myUserId={presence.userId}
+                  onlineCount={onlineCount}
+                  voiceStatus={groupVoice.status}
+                  onJoinVoice={joinVoice}
+                  onLeaveVoice={leaveVoice}
+                />
+              </div>
+            ) : (
+              <LobbyThread
+                conversationId={lobbyDoc._id}
+                myUserId={presence.userId}
+                onlineCount={onlineCount}
+                voiceStatus={groupVoice.status}
+                onJoinVoice={joinVoice}
+                onLeaveVoice={leaveVoice}
+              />
+            )
           ) : (
             <LobbyLoadingState />
           )
@@ -338,10 +404,11 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       </main>
 
       {/* Phase 4 — Incoming call toast (Decision D6, D12). Persists across view modes. */}
+      {/* Phase 6 — onAccept wrapped to leave group voice first (Decision D9). */}
       {call.incomingCall && (
         <IncomingCallToast
           caller={call.incomingCall.caller}
-          onAccept={call.accept}
+          onAccept={acceptCallWithVoiceLeave}
           onDecline={call.reject}
         />
       )}

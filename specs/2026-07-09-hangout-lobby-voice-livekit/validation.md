@@ -1,0 +1,108 @@
+# Phase 6 — Hangout lobby (group voice via LiveKit): Validation
+
+How to know the implementation succeeded and can be merged. Per Decision D15, merge requires **automated gates green AND manual smokes**.
+
+## Automated gates (must all pass)
+- [ ] `bun run lint` exits 0 (ESLint, no errors) — inherited from Phase 0/1/2/3/4/5.
+- [ ] `bun run typecheck` exits 0 (`tsc --noEmit`) — inherited from Phase 0/1/2/3/4/5.
+- [ ] `bun tauri build` completes and emits a release binary for the current platform — inherited from Phase 0/1/2/3/4/5. Record the binary size delta (the LiveKit SDK is the first non-trivial size increase since Phase 4) in the merge notes.
+- [ ] Convex action registers cleanly: `bunx convex dev` (or `codegen`) regenerates `_generated/` for the new `livekit.ts` action with no errors; `api.livekit.mintToken` resolves in the frontend. **No schema change expected** (Decision D16) — `convex/schema.ts` is untouched; voice room state lives in LiveKit (D4), not Convex.
+- [ ] No credentials/tokens introduced into the tree (Phase 1 D1 still holds): `git grep -iE "client[_-]?secret|refresh[_-]?token|access[_-]?token"` returns nothing outside code identifiers; the LiveKit `LIVEKIT_API_SECRET` is NOT committed and NOT in any `VITE_*` env — it lives only in the Convex deployment environment (set via `bunx convex env add`, Decision D3). Re-verify `git grep -iE "LIVEKIT_API_SECRET"` only appears in `.env.example` (as a placeholder + comment) and in `convex/livekit.ts` reading `process.env`, never in committed `.env*` files or `VITE_*` vars.
+- [ ] No extra Discord scopes requested (Phase 1 D4 `identify`-only still holds): `git grep -iE "scope.*email|scope.*guilds|scope.*presence"` returns nothing.
+- [ ] LiveKit SDK dependencies present (Decision D2 — the Phase-5 "no new dependencies" gate does NOT apply to Phase 6): `package.json` gains exactly `livekit-client`, `@livekit/components-react`, and `livekit-server-sdk` — no other WebRTC/voice wrapper, no video-conference prebuilt. The Phase-4 raw-WebRTC stance (no `simple-peer`/`peerjs`) is unchanged — `src/webrtc/peerConnection.ts` is untouched.
+- [ ] **No schema change** (Decision D16): `git diff convex/schema.ts` shows no changes — voice room state lives in LiveKit (D4), not Convex. The `users`/`presence`/`conversations`/`messages`/`typing`/`calls` tables are reused as-is; no `voiceRooms`/`voiceParticipants` table is added.
+- [ ] **Windows-only validation** (Decision D14 — inherits Phase 4 D9): Phase 6 is validated on Windows (WebView2) only. No macOS `NSMicrophoneUsageDescription` or Linux WebKitGTK permission handling is wired. If the first mic smoke fails on Windows, the fix is likely Windows OS mic privacy settings (validated in Phase 4), not Tauri config.
+
+## Manual smoke 1 — 3+ join/leave freely, audio stable (the Phase-6 DoD, first half)
+1. Three machines (or three OS user profiles) running `bun tauri dev`, each logged in as a different Discord account (all in `users` via Phase 1; all appear in each other's sidebar via Phase 2; all have the lobby via Phase 5). Requires the user's three Discord test accounts.
+2. On client A, switch to the "Lobby" view (icon rail). Click "Join Voice" in the `LobbyThread` header. The layout splits: `VoiceStage` (left, ~300px) + `LobbyThread` (right). A's `VoiceStage` shows "You're the first one here" (only the local participant).
+3. B clicks "Join Voice" → B's `VoiceStage` shows A + B; A's `VoiceStage` reactively shows B appear (LiveKit `RoomEvent.ParticipantConnected` — confirm via the SDK that it's event-driven, no polling). C clicks "Join Voice" → all three see all three in the roster.
+4. A, B, C each speak in turn → the others hear them; the speaking indicator (green ring) lights up around the active speaker's avatar on all three clients. Confirm audio stays stable with all three talking (no dropouts, no echo howl beyond what echoCancellation handles) for ~30s.
+5. A clicks "Leave Voice" → A's `VoiceStage` disappears (layout returns to full-width text); B and C see A disappear from the roster live. B and C remain in voice (2-party now) → audio still works. C leaves → B is alone again ("You're the first one here"). B leaves → full-width text, no `VoiceStage`.
+- [ ] Pass: 3+ members join/leave freely; audio stays stable with 3 concurrent speakers; the roster updates live on join/leave; the speaking indicator tracks the active speaker; no manual refresh.
+
+## Manual smoke 2 — Mute / deafen round-trip in group (the Phase-6 DoD, second half)
+1. Smoke 1 setup with A, B, C all in voice.
+2. A clicks mute → A's mic icon shows muted; B and C confirm A's audio goes silent (can no longer hear A). A clicks mute again → B and C hear A again. Confirm A's roster entry shows the muted mic icon on B's and C's clients.
+3. A clicks deafen → A's speakers mute AND A's mic mutes (Discord deafen semantics — Decision D7, inherited from Phase 4): B and C confirm A goes silent (mic muted), and A confirms B and C go silent (speakers muted). A clicks deafen again → both restore.
+4. B repeats the mute/deafen round-trip; A and C confirm symmetrically. C repeats; A and B confirm.
+- [ ] Pass: mute and deafen toggle cleanly in the group context with the correct speaker/mic semantics (deafen = can't hear AND can't talk); the UI state reflects the toggles on the local client; the muted mic icon propagates to other clients' rosters.
+
+## Manual smoke 3 — Leave + rejoin one-click, no teardown dance (the Phase-6 DoD, third half)
+1. A is in voice (smoke 1 setup). A clicks "Leave Voice" → `VoiceStage` disappears, local tracks stop, the OS mic-in-use indicator clears.
+2. A clicks "Join Voice" again → `VoiceStage` reappears, A is back in the room, others see A re-join live. Confirm this is a single click each way — no "end call" + "start new call" ceremony, no stale state from the first session (a fresh `Room` instance, fresh token, fresh `getUserMedia`).
+3. Rapidly join/leave 3 times in succession → each cycle is clean (no lingering mic indicator between cycles, no duplicate roster entries on other clients, no audio ghosting).
+- [ ] Pass: leaving and rejoining is one click each way; no teardown/setup dance; rapid rejoin cycles are clean with no stale state; the roadmap's "leaving and rejoining is one click with no call teardown dance" is satisfied.
+
+## Manual smoke 4 — Side-by-side layout + roster + speaking indicators (Decisions D6, D8)
+1. On client A, in the "Lobby" view, NOT in voice → the lobby is full-width text (current Phase-5 behavior, unchanged).
+2. A clicks "Join Voice" → the layout splits: `VoiceStage` (left, ~300px, right-bordered) + `LobbyThread` (right, flex-1). Confirm the text thread is still fully usable while in voice (send a message → it appears; type → typing indicator shows).
+3. B joins → A's `VoiceStage` roster shows A + B with avatars (from token metadata), names (`displayName ?? username`), and a mute icon if either is muted. A speaks → the green speaking ring lights on A's avatar on B's client (and on A's own "You" entry).
+4. A switches to "DMs" view (icon rail) while in voice → the `VoiceStage` unmounts but audio PERSISTS (the `Room` lives in `useGroupVoice`, not the component — Decision D6/8.5). A can browse DMs / take a 1:1-call-free DM action while still in group voice. A switches back to "Lobby" → the `VoiceStage` remounts and the roster re-renders. Confirm no audio dropout during the view switch.
+- [ ] Pass: the side-by-side layout renders when in voice; the roster shows participants with avatars/names/speaking-indicators/mute-icons; the text thread works alongside voice; group voice audio persists across view-mode switches (VoiceStage unmount/remount doesn't drop the Room).
+
+## Manual smoke 5 — Mutual exclusivity with 1:1 call (Decision D9)
+1. A and B are both online. A is in group voice (alone). A opens B's DM thread and clicks the 1:1 call button → the group voice leaves FIRST (`groupVoice.leave()`), THEN the 1:1 call starts. Confirm A's `VoiceStage` disappears, the 1:1 `CallControls` floating overlay appears, and the 1:1 call connects normally (Phase 4 flow). B sees the 1:1 incoming-call toast (not a group-voice event).
+2. While A is on the 1:1 call with B, A switches to the Lobby view and clicks "Join Voice" → the 1:1 call leaves FIRST (`call.leave("left")`), THEN group voice joins. Confirm A's 1:1 `CallControls` disappears (and B's 1:1 call ends cleanly — B sees A leave), then A's `VoiceStage` appears.
+3. Confirm only one of {1:1 call overlay, group voice stage} is ever visible at a time; the OS mic indicator reflects a single `getUserMedia` handle (no double-mic acquisition).
+- [ ] Pass: joining group voice leaves any active 1:1 call; starting a 1:1 call leaves group voice; the two voice paths are mutually exclusive; no double mic acquisition; the non-active path tears down cleanly.
+
+## Manual smoke 6 — coturn TURN fallback across NAT (Decision D10; conditional — requires a strict-NAT test client)
+1. Same setup as smoke 1, but one client is on a network where direct UDP is blocked (e.g. a mobile hotspot with strict/symmetric NAT, or a corporate wifi). The others are on normal networks.
+2. The strict-NAT client clicks "Join Voice" → confirm it connects to the LiveKit room (relaying through coturn TURN as LiveKit's fallback). Inspect LiveKit's connection stats (the SDK exposes `participant.getPublisherConnectionQuality()` / ICE candidate types via `room.getStats()` or the LiveKit inspector) — confirm the selected candidate pair includes a `relay` (TURN) candidate for the strict-NAT client.
+3. Two-way audio works between the strict-NAT client and the others despite the strict NAT (this is what coturn-as-LiveKit-TURN provides — without it, the strict-NAT client would fail ICE against the LiveKit SFU).
+4. If no strict-NAT test network is available, mark this smoke as "not exercised this round" and note it in the merge notes — it is the one smoke that depends on network topology the user controls. The DoD's "audio stays stable" is satisfied by smoke 1 on any topology; smoke 6 specifically validates the coturn-as-LiveKit-TURN fallback path (Decision D10).
+- [ ] Pass: the strict-NAT client connects via a TURN `relay` candidate through coturn; two-way audio works across the NAT boundary; coturn is the LiveKit fallback path (D10).
+
+## Manual smoke 7 — Teardown on logout + window close (Decision D12)
+1. A is in group voice (smoke 1 setup). A logs out → confirm `groupVoice.leave()` fires BEFORE `goOffline()` (the OS mic-in-use indicator clears, then presence goes offline). The `VoiceStage` disappears; the `Room` disconnects; local tracks stop. Other clients see A leave the roster live.
+2. A logs back in → fresh session, A is NOT auto-joined to voice (joining is an explicit action — no "last voice state" restoration, Decision D6.6). A clicks "Join Voice" → rejoins cleanly.
+3. A joins voice again, then closes the app window (fully quit, not minimize). Confirm the Tauri `onCloseRequested` teardown fires `groupVoice.leave()` (race-timeout-guarded) before `goOffline` + `win.destroy()`. The OS mic indicator clears. Other clients see A leave the roster within ~3s (the teardown timeout backstop + LiveKit's own disconnect detection).
+4. Reopen the app → A is not in voice (clean state).
+- [ ] Pass: group voice disconnects on logout + window close, before `goOffline`; the OS mic indicator clears; no `getUserMedia` handle lingers; other clients see the departure live; a fresh session does not auto-rejoin voice.
+
+## Manual smoke 8 — No regression in Phase 2/3/4/5
+1. **Phase 2 (presence):** the sidebar still shows all friends with online/offline dots + status text. Appear/disappear still works live. The status input still works. The sidebar is still collapsible. The icon rail stays visible when the sidebar is collapsed.
+2. **Phase 3 (DM text):** switch to "DMs" mode. Open a DM. Send a message → the peer sees it live. Reopen the DM → full history. Typing indicator works in the DM. The DM list reorders by `lastMessageAt`. The last-opened DM persists across relaunch. Image/GIF/emoji/link-preview rich messaging still works in both DM and lobby.
+3. **Phase 4 (1:1 voice):** switch to "DMs" mode. Open a DM. Click the call button → the 1:1 call flow works (toast, accept, two-way audio, mute/deafen, leave). The floating 1:1 call overlay persists across view-mode switches. Confirm smoke 5's mutual exclusivity didn't break the 1:1 path — starting a 1:1 call when NOT in group voice works exactly as in Phase 4 (no spurious `groupVoice.leave` since `groupVoice.connected` is false).
+4. **Phase 5 (lobby text):** switch to "Lobby" mode when NOT in voice → full-width lobby text thread, multi-person typing indicator, view-mode persistence, lobby auto-creation on login. The icon rail switches between lobby and DMs. View mode persists across relaunch and is cleared on logout.
+- [ ] Pass: no regression in presence, DM text, 1:1 voice, or lobby text; the icon rail + view-mode + sidebar collapse + rich messaging all still work; the 1:1 call path is unchanged when group voice is not active.
+
+## Repo hygiene + Phase-6-specific checks
+- [ ] **No schema change** (Decision D16): `git diff convex/schema.ts` is empty. Voice room state lives in LiveKit (D4), not Convex. This validates the decision NOT to mirror voice state into a Convex table.
+- [ ] **LiveKit SDK is the group-voice surface** (Decision D2): `package.json` gains exactly `livekit-client`, `@livekit/components-react`, `livekit-server-sdk`. `src/hooks/useGroupVoice.ts` uses `livekit-client`'s `Room`; `src/components/cvoice/VoiceStage.tsx` uses `@livekit/components-react`'s hooks; `convex/livekit.ts` uses `livekit-server-sdk`'s `AccessToken`. No raw WebRTC reimplementation for group voice. The Phase-4 `src/webrtc/peerConnection.ts` is untouched (1:1 stays raw WebRTC).
+- [ ] **Token minting is a Convex action; API secret is server-side** (Decision D3): `convex/livekit.ts` exposes `mintToken` as an action reading `process.env.LIVEKIT_API_KEY`/`process.env.LIVEKIT_API_SECRET`. `git grep -iE "LIVEKIT_API_SECRET"` matches only `.env.example` (placeholder + comment) and `convex/livekit.ts` (reading `process.env`). No `VITE_LIVEKIT_API_SECRET` exists — the secret never reaches the client. The frontend reads only `import.meta.env.VITE_LIVEKIT_URL`.
+- [ ] **Single fixed room `"lobby"`** (Decision D1/D4): `mintToken` grants `roomJoin: true` for room `"lobby"` only — no cross-room access. LiveKit auto-starts the room on first connect + auto-empties on last disconnect; there is no create/destroy lifecycle in code. No Convex doc tracks the room (D4).
+- [ ] **Single-click join; no toast/invite for group voice** (Decision D5): the `LobbyThread` header has a "Join Voice"/"Leave Voice" button. There is NO incoming-call toast / invite flow for group voice (the Phase-4 `IncomingCallToast` is 1:1-only). Joining is `mintToken` → `room.connect`; leaving is `room.disconnect`.
+- [ ] **Side-by-side layout owned by `AuthenticatedLayout`** (Decision D6): in the `viewMode === "lobby"` branch, the layout renders `VoiceStage` + `LobbyThread` side by side when group voice is active, and full-width `LobbyThread` when not. `LobbyThread` gains only the header button + a slim `groupVoice` slice prop — it does not own the `VoiceStage`.
+- [ ] **`VoiceStage` reuses Phase-4 mute/deafen/leave iconography** (Decision D7): mute/deafen/leave buttons match `CallControls`'s icons + Discord semantics. `CallControls` itself is unchanged (1:1-only). `VoiceStage` is in `src/components/cvoice/` (distinct from `src/components/call/`).
+- [ ] **Roster + speaking indicator from LiveKit** (Decision D8): `VoiceStage` uses `@livekit/components-react`'s `useParticipants`; each entry parses `participant.metadata` (JSON `{ avatarUrl, displayName, username }` — D11) for avatar/name; the green ring tracks `participant.isSpeaking`; the mute icon tracks `!participant.isMicrophoneEnabled`.
+- [ ] **Mutual exclusivity enforced in the layout** (Decision D9): `AuthenticatedLayout` wraps `groupVoice.join` to leave a 1:1 call first, and wraps `call.startCall`/`accept` to leave group voice first. Only one of {1:1 `CallControls` overlay, group `VoiceStage`} is ever visible. Confirm no double `getUserMedia` (single OS mic indicator).
+- [ ] **Identity = `users._id` in the token** (Decision D11): `mintToken` sets `token.identity = userId` (the `users._id`), `name = displayName ?? username`, `metadata = JSON.stringify({ avatarUrl, displayName, username })`. The token is scoped to room `"lobby"` only.
+- [ ] **Teardown ordering** (Decision D12): `handleLogout` + `onCloseRequested` call `groupVoice.leave()` BEFORE `call.leave()` + `goOffline()`. The group-voice leave is race-timeout-guarded (3s) like the 1:1 call leave. Confirm the OS mic indicator clears on logout + close.
+- [ ] **coturn is LiveKit's TURN** (Decision D10): the user has confirmed LiveKit's server config points at the Phase-4 coturn (`turn:<vm-host>:3478`). The client code does NOT configure ICE for group voice — LiveKit manages it server-side. No `VITE_ICE_SERVERS` involvement for group voice (that stays 1:1-only, Phase 4).
+- [ ] **`useGroupVoice` is a separate hook** (Decision D4): `src/hooks/useGroupVoice.ts` is distinct from `src/hooks/useCall.ts`. The two hooks don't import each other (the layout composes them + wires mutual exclusivity via callbacks — no circular dependency).
+- [ ] **Audio persists across view-mode switches** (Decision D6.5): switching to "DMs" while in group voice unmounts the `VoiceStage` but the `Room` (in `useGroupVoice`) stays connected + audio keeps playing. Switching back to "Lobby" remounts the `VoiceStage` + re-renders the roster. No audio dropout during the switch.
+- [ ] Foreign-key integrity: `mintToken` loads the `users` doc for the passed `userId` — if the user doesn't exist, the action throws (no token minted for a non-user). No new FKs (no new tables — D16).
+- [ ] `counter` table (Phase-0 remnant) is untouched — not removed in Phase 6 (cleanup deferred).
+- [ ] **Public token-mint** (Decision D13): `mintToken` is a public Convex action (no auth middleware), keyed by `userId`. The v1 spoofing limitation (a client could pass another user's `userId` and join as them) is documented in a comment in `convex/livekit.ts` and in `README.md` Phase 6 section.
+- [ ] **All three docs updated**: `README.md` Phase 6 section present (`## 3.7 Phase 6 — Hangout lobby (group voice via LiveKit)`); `specs/roadmap.md` Phase 6 STATUS marker added; `AGENTS.md` phase status line updated to include Phase 6. The Phase 6 section records: the LiveKit SFU choice, the single `"lobby"` room, the Convex-action token mint + server-side API secret, the official-SDK stance, the single-click join + side-by-side layout, the reuse of Phase-4 mute/deafen/leave, the mutual exclusivity with 1:1, the coturn-as-LiveKit-TURN config, the public-mint v1 limitation (D13), the Windows-only platform scope (D14), the no-schema-change (D16), the deferred video/screen-share/push-to-talk/multiple-rooms, and Phase 7's deferred formal profiling.
+
+## Explicitly NOT validated here (out of scope — later phases / not in v1)
+- ~~Video~~ → not in v1 (mission: voice only).
+- ~~Screen share~~ → not in v1.
+- ~~Call / voice recording~~ → not in v1.
+- ~~Push-to-talk~~ → not in v1 (mission: pared-down).
+- ~~VAD threshold tuning UI~~ → LiveKit defaults; no per-user slider for v1.
+- ~~Multiple voice rooms / channels~~ → not in v1 (mission: one shared space). Single `"lobby"` room.
+- ~~Voice permissions / server-mute-others / kick~~ → not in v1 (mission non-goals: no moderation tooling).
+- ~~1:1 voice via LiveKit~~ → Phase 4's direct WebRTC stays for 1:1 (no SFU for 2 people).
+- ~~Incoming-call toast / invite flow for group voice~~ → explicitly NOT Phase 6 (Decision D5 — the room is always open; you join, you don't get "called").
+- ~~OS notifications for voice events (who joined/left)~~ → out of scope for v1 (in-app roster is the surface).
+- ~~Convex auth / per-user write authorization for token minting~~ → deferred (Decision D13 — public token-mint is a known v1 limitation, not a validation failure).
+- ~~Full Discord-derived theme polish~~ → Phase 7 (Phase 6 voice UI is functional, lightly styled).
+- ~~Formal idle CPU/RAM profiling under gaming load + audio-stutter-under-load measurement~~ → Phase 7 (Phase 6 includes only the light "audio stable with 3+" smoke; the hard constraint's measurement phase is Phase 7).
+- ~~LiveKit server-side recording / egress / insights~~ → not in v1.
+
+## Merge criteria
+All automated gates green + manual smokes 1–5 + 7 + 8 passing + repo-hygiene + Phase-6-specific checks box-checked. Smoke 6 (coturn TURN fallback across NAT) is conditional on the user having a strict-NAT test network; if unavailable this round, note it and mark it pending — it validates the coturn-as-LiveKit-TURN fallback path specifically (Decision D10), while smoke 1 satisfies the literal DoD on any topology. Anything in the "NOT validated here" list is explicitly allowed to be absent. The Phase-6 DoD from `specs/roadmap.md` is satisfied when smokes 1 + 2 + 3 pass: *3+ members join/leave freely; audio stays stable; leaving and rejoining is one click with no call teardown dance.* Smokes 4 + 5 + 7 + 8 validate the side-by-side layout + roster (D6/D8), the mutual exclusivity with 1:1 (D9), the teardown on logout/close (D12), and no-regression in Phase 2/3/4/5. The key Phase-6 validation is **Decision D16 — no schema change**: voice room state lives in LiveKit, and `git diff convex/schema.ts` empty proves it; and **Decision D3 — the API secret stays server-side**: `git grep` confirms no `VITE_LIVEKIT_API_SECRET` exists.
