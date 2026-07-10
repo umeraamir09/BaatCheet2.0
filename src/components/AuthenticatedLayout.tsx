@@ -6,6 +6,8 @@ import { Id } from "../../convex/_generated/dataModel";
 import { usePresence } from "../hooks/usePresence";
 import { useCall } from "../hooks/useCall";
 import { useGroupVoice } from "../hooks/useGroupVoice";
+import { useKeybindPreferences } from "../hooks/useKeybindPreferences";
+import { useVoiceKeybinds } from "../hooks/useVoiceKeybinds";
 import { PresenceSidebar } from "./PresenceSidebar";
 import { DMThread, EmptyDMState, type PeerProfile } from "./DMThread";
 import { LobbyThread } from "./LobbyThread";
@@ -13,6 +15,8 @@ import { IconRail } from "./IconRail";
 import { IncomingCallToast } from "./call/IncomingCallToast";
 import { CallControls } from "./call/CallControls";
 import { VoiceStage } from "./voice/VoiceStage";
+import { SettingsModal } from "./settings/SettingsModal";
+import { checkAndInstallUpdate, type UpdateStatus } from "../lib/updater";
 import type { User } from "../auth";
 
 const SIDEBAR_COLLAPSED_KEY = "baatcheet.sidebar.collapsed";
@@ -46,6 +50,7 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
   const presence = usePresence(user.id);
   const call = useCall(presence.userId);
   const groupVoice = useGroupVoice(presence.userId);
+  const keybinds = useKeybindPreferences();
   const getOrCreateDM = useMutation(api.conversations.getOrCreateDM);
 
   // Phase 5 — Lobby auto-creation (Decision D6).
@@ -91,6 +96,12 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
     } catch {
       return false;
     }
+  });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [keybindCaptureActive, setKeybindCaptureActive] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({
+    state: "idle",
+    message: "Ready to check the configured local/static endpoint.",
   });
 
   // Phase 5 — View mode state (Decision D10). Default "lobby" on fresh login.
@@ -186,6 +197,39 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       call.status !== "idle" && call.status !== "ended" && call.peerUserId === effectivePeerUserId
     );
   }, [call.status, call.peerUserId, effectivePeerUserId]);
+
+  const callActive = call.status !== "idle" && call.status !== "ended";
+
+  const toggleVoiceMute = useCallback(() => {
+    if (callActive) {
+      call.setMuted(!call.muted);
+      return;
+    }
+    if (groupVoice.connected) {
+      groupVoice.setMuted(!groupVoice.muted);
+    }
+  }, [call, callActive, groupVoice]);
+
+  const toggleVoiceDeafen = useCallback(() => {
+    if (callActive) {
+      call.setDeafened(!call.deafened);
+      return;
+    }
+    if (groupVoice.connected) {
+      groupVoice.setDeafened(!groupVoice.deafened);
+    }
+  }, [call, callActive, groupVoice]);
+
+  useVoiceKeybinds({
+    preferences: keybinds.preferences,
+    captureActive: keybindCaptureActive,
+    onToggleMute: toggleVoiceMute,
+    onToggleDeafen: toggleVoiceDeafen,
+  });
+
+  const checkForUpdates = useCallback(() => {
+    void checkAndInstallUpdate(setUpdateStatus);
+  }, []);
 
   // Phase 4 — Start a call with the active peer (Decision D12).
   // Phase 6 — Leave group voice first if connected (Decision D9 — mutual exclusivity).
@@ -352,6 +396,7 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
         onToggleCollapse={toggleCollapse}
         user={user}
         onLogout={handleLogout}
+        onOpenSettings={() => setSettingsOpen(true)}
         activeConversationId={effectiveConversationId}
         activePeerUserId={effectivePeerUserId}
         onSelectPeer={selectPeer}
@@ -363,7 +408,7 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
             // Phase 6 — Side-by-side layout when group voice is active (Decision D6).
             // VoiceStage (left, fixed width) + LobbyThread (right, flex-1).
             // When not in voice, full-width LobbyThread (Phase 5 behavior).
-            (groupVoice.connected || groupVoice.connecting) ? (
+            groupVoice.connected || groupVoice.connecting ? (
               <div className="flex h-full flex-1">
                 <VoiceStage groupVoice={groupVoice} />
                 <LobbyThread
@@ -417,6 +462,11 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       {call.status !== "idle" && call.status !== "ended" && (
         <CallControls
           status={call.status}
+          localProfile={{
+            displayName: user.displayName,
+            username: user.username,
+            avatarUrl: user.avatarUrl,
+          }}
           peerProfile={call.peerProfile}
           muted={call.muted}
           deafened={call.deafened}
@@ -426,6 +476,21 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
           audioRef={call.audioRef}
         />
       )}
+
+      <SettingsModal
+        open={settingsOpen}
+        keybinds={keybinds.preferences}
+        updateStatus={updateStatus}
+        onClose={() => {
+          setSettingsOpen(false);
+          setKeybindCaptureActive(false);
+        }}
+        onSetBinding={keybinds.setBinding}
+        onSetEnabled={keybinds.setEnabled}
+        onResetKeybinds={keybinds.reset}
+        onCaptureChange={setKeybindCaptureActive}
+        onCheckForUpdates={checkForUpdates}
+      />
     </div>
   );
 }
