@@ -24,6 +24,13 @@ export default defineSchema({
   })
     .index("byUser", ["userId"])
     .index("byDiscordId", ["discordId"]),
+  // Shared-voice roster is independent of the LiveKit client. This lets users
+  // see who is in Hangout before they join the room themselves.
+  voicePresence: defineTable({
+    userId: v.id("users"),
+    joinedAt: v.number(),
+    lastSeen: v.number(),
+  }).index("byUser", ["userId"]),
   // Phase 3 — 1:1 DM text (Decisions D1, D3). Generic conversation + message
   // tables so Phase 5's group lobby is a `type:"group"` doc reusing `messages`,
   // not a second table (D1). `key` is the canonical sorted "userIdA__userIdB"

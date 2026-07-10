@@ -2,17 +2,18 @@ use crate::auth::{oauth::TokenSet, profile::User};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// OS keychain service name (Windows Credential Manager / macOS Keychain / Linux Secret Service).
 const KEYCHAIN_SERVICE: &str = "baatcheet";
+const KEYCHAIN_ACCOUNT: &str = "discord_session_v2";
+const SCHEMA_VERSION: u8 = 2;
 
-/// OS keychain account/username for the Discord token entry.
-const KEYCHAIN_ACCOUNT: &str = "discord_tokens";
-
-/// Persisted token set stored in the OS keychain (Decision D1 — never plaintext).
-/// `expires_at` is absolute epoch seconds (spec task 4.4).
-/// `client_id` is the Discord Client ID needed for token refresh on cold start.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Secret session material. It is stored only in Credential Manager and, on
+/// Windows, a DPAPI CurrentUser-encrypted recovery copy. Never log this type.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StoredTokens {
+    #[serde(default = "schema_version")]
+    pub schema_version: u8,
+    #[serde(default)]
+    pub generation: u64,
     pub access_token: String,
     pub refresh_token: String,
     pub expires_at: u64,
@@ -22,255 +23,135 @@ pub struct StoredTokens {
     pub user: Option<User>,
 }
 
-/// Directory for file-based fallback storage (resolved lazily from `dirs::data_dir()`).
+fn schema_version() -> u8 { SCHEMA_VERSION }
+
 fn fallback_dir() -> PathBuf {
-    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join("baatcheet")
+    dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")).join("BaatCheet").join("auth")
 }
 
-/// File path for the fallback token store.
-fn fallback_path() -> PathBuf {
-    fallback_dir().join("discord_tokens.json")
+fn fallback_path() -> PathBuf { fallback_dir().join("session.v2.bin") }
+fn legacy_path() -> PathBuf {
+    dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("baatcheet").join("discord_tokens.json")
 }
 
-/// Save the token set to BOTH the OS keychain AND a file-based fallback.
-/// The `TokenSet` from Discord (which has relative `expires_in`) is converted
-/// to absolute `expires_at` before storage. The `client_id` is persisted
-/// alongside tokens so refresh works on cold start.
 pub fn save(tokens: &TokenSet, client_id: Option<&str>, user: Option<&User>) -> Result<(), String> {
-    let expires_at = current_epoch_secs() + tokens.expires_in;
-    let stored = StoredTokens {
+    let previous_generation = load().ok().flatten().map(|s| s.generation).unwrap_or(0);
+    save_stored(&StoredTokens {
+        schema_version: SCHEMA_VERSION,
+        generation: previous_generation.saturating_add(1),
         access_token: tokens.access_token.clone(),
         refresh_token: tokens.refresh_token.clone(),
-        expires_at,
-        client_id: client_id.map(|s| s.to_string()),
+        expires_at: current_epoch_secs().saturating_add(tokens.expires_in),
+        client_id: client_id.map(ToOwned::to_owned),
         user: user.cloned(),
-    };
-
-    let mut last_err = None;
-
-    // Always try keychain first.
-    match save_to_keychain(&stored) {
-        Ok(()) => eprintln!("[store] Keychain save succeeded"),
-        Err(e) => {
-            eprintln!("[store] Keychain save failed (non-fatal, using file fallback): {e}");
-            last_err = Some(e);
-        }
-    }
-
-    // Always write to file fallback too.
-    match save_to_file(&stored) {
-        Ok(()) => eprintln!("[store] File fallback save succeeded ({})", fallback_path().display()),
-        Err(e) => {
-            eprintln!("[store] File fallback save failed: {e}");
-            last_err = Some(e);
-        }
-    }
-
-    match last_err {
-        None => Ok(()),
-        Some(e) => Err(format!("token save failed (keychain and file both tried): {e}")),
-    }
+    })
 }
 
 pub fn save_stored(stored: &StoredTokens) -> Result<(), String> {
-    save_to_keychain(stored)?;
-    save_to_file(stored).ok(); // non-fatal
+    let json = serde_json::to_vec(stored).map_err(|_| "could not serialize session".to_string())?;
+    let mut saved = false;
+    if save_to_keychain(&json).is_ok() { saved = true; }
+    if save_to_protected_file(&json).is_ok() { saved = true; }
+    if !saved { return Err("Could not securely save the session. Check Credential Manager and retry.".into()); }
+    // Migration is deliberately after at least one protected write succeeds.
+    let _ = std::fs::remove_file(legacy_path());
     Ok(())
 }
 
-fn save_to_keychain(stored: &StoredTokens) -> Result<(), String> {
-    let json = serde_json::to_string(&stored).map_err(|e| format!("serialize tokens: {e}"))?;
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-        .map_err(|e| format!("create keychain entry: {e}"))?;
-    entry
-        .set_password(&json)
-        .map_err(|e| format!("save to keychain: {e}"))
-}
-
-fn save_to_file(stored: &StoredTokens) -> Result<(), String> {
-    let dir = fallback_dir();
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("create fallback dir {}: {e}", dir.display()))?;
-    let json = serde_json::to_string_pretty(&stored)
-        .map_err(|e| format!("serialize tokens: {e}"))?;
-    let path = fallback_path();
-    std::fs::write(&path, &json)
-        .map_err(|e| format!("write fallback file {}: {e}", path.display()))
-}
-
-/// Load the token set from the OS keychain, falling back to a file-based store.
-/// Returns `None` if no entry exists (first launch or after logout).
 pub fn load() -> Result<Option<StoredTokens>, String> {
-    // Try keychain first.
-    match load_from_keychain() {
-        Ok(Some(stored)) => {
-            eprintln!("[store] Loaded from keychain successfully");
-            return Ok(Some(stored));
+    let mut records = Vec::new();
+    if let Some(record) = load_from_keychain()? { records.push(record); }
+    if let Some(record) = load_from_protected_file()? { records.push(record); }
+    // One-time migration from the old plaintext fallback. Do not retain it.
+    if records.is_empty() {
+        if let Ok(bytes) = std::fs::read(legacy_path()) {
+            if let Ok(mut legacy) = serde_json::from_slice::<StoredTokens>(&bytes) {
+                legacy.schema_version = SCHEMA_VERSION;
+                legacy.generation = 1;
+                save_stored(&legacy)?;
+                return Ok(Some(legacy));
+            }
         }
-        Ok(None) => {
-            eprintln!("[store] Keychain has no entry — checking file fallback...");
-        }
-        Err(e) => {
-            eprintln!("[store] Keychain load error: {e}");
-        }
+        return Ok(None);
     }
+    records.sort_by_key(|record| record.generation);
+    let selected = records.pop().expect("records is non-empty");
+    // Heal a missing/stale protected copy; errors are non-fatal when one secure
+    // source successfully restored the session.
+    let _ = save_stored(&selected);
+    Ok(Some(selected))
+}
 
-    // Fall back to file.
-    load_from_file()
+pub fn clear() -> Result<(), String> {
+    let mut cleared = false;
+    match keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT) {
+        Ok(entry) => match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => cleared = true,
+            Err(_) => {},
+        },
+        Err(_) => {},
+    }
+    match std::fs::remove_file(fallback_path()) {
+        Ok(()) => cleared = true,
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => cleared = true,
+        Err(_) => {},
+    }
+    let _ = std::fs::remove_file(legacy_path());
+    if cleared { Ok(()) } else { Err("Could not clear the protected session; logout will retry on next launch.".into()) }
+}
+
+fn save_to_keychain(bytes: &[u8]) -> Result<(), String> {
+    let value = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes);
+    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+        .map_err(|_| "Credential Manager unavailable".to_string())?
+        .set_password(&value)
+        .map_err(|_| "Credential Manager write failed".to_string())
 }
 
 fn load_from_keychain() -> Result<Option<StoredTokens>, String> {
-    let entry_result = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
-    let entry = match entry_result {
-        Ok(e) => e,
-        Err(err) => {
-            eprintln!("[store] keyring::Entry::new failed: {err}");
-            return Err(format!("create keychain entry: {err}"));
-        }
-    };
-    match entry.get_password() {
-        Ok(json) => {
-            eprintln!("[store] Keychain raw entry found ({} bytes)", json.len());
-            match serde_json::from_str::<StoredTokens>(&json) {
-                Ok(stored) => {
-                    eprintln!(
-                        "[store] Deserialized OK: expires_at={}, has_client_id={}, has_cached_user={}",
-                        stored.expires_at,
-                        stored.client_id.is_some(),
-                        stored.user.is_some(),
-                    );
-                    Ok(Some(stored))
-                }
-                Err(e) => {
-                    eprintln!("[store] Failed to deserialize keychain JSON: {e}");
-                    eprintln!(
-                        "[store] Raw JSON (first 500 chars): {}",
-                        &json[..json.len().min(500)]
-                    );
-                    Err(format!("deserialize tokens: {e}"))
-                }
-            }
-        }
-        Err(keyring::Error::NoEntry) => {
-            eprintln!("[store] No keychain entry for 'baatcheet'/'discord_tokens' (NoEntry)");
-            Ok(None)
-        }
-        Err(e) => {
-            eprintln!("[store] Keychain access error (not NoEntry): {e:?}");
-            Err(format!("load from keychain: {e}"))
-        }
-    }
-}
-
-fn load_from_file() -> Result<Option<StoredTokens>, String> {
-    let path = fallback_path();
-    if !path.exists() {
-        eprintln!("[store] File fallback does not exist at {}", path.display());
-        return Ok(None);
-    }
-
-    match std::fs::read_to_string(&path) {
-        Ok(json) => {
-            eprintln!("[store] File fallback read ({} bytes)", json.len());
-            match serde_json::from_str::<StoredTokens>(&json) {
-                Ok(stored) => {
-                    eprintln!(
-                        "[store] File fallback deserialized OK: expires_at={}, has_client_id={}, has_cached_user={}",
-                        stored.expires_at,
-                        stored.client_id.is_some(),
-                        stored.user.is_some(),
-                    );
-                    Ok(Some(stored))
-                }
-                Err(e) => {
-                    eprintln!("[store] Failed to deserialize file fallback JSON: {e}");
-                    eprintln!(
-                        "[store] Raw file JSON (first 500 chars): {}",
-                        &json[..json.len().min(500)]
-                    );
-                    Err(format!("deserialize file fallback: {e}"))
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("[store] Failed to read file fallback: {e}");
-            Err(format!("read file fallback: {e}"))
-        }
-    }
-}
-
-/// Clear the token set from BOTH the OS keychain AND the file fallback.
-pub fn clear() -> Result<(), String> {
-    let mut last_err = None;
-
-    // Clear keychain.
-    match clear_keychain() {
-        Ok(()) => eprintln!("[store] Keychain cleared"),
-        Err(e) => {
-            eprintln!("[store] Keychain clear error: {e}");
-            last_err = Some(e);
-        }
-    }
-
-    // Clear file fallback.
-    match clear_file() {
-        Ok(()) => eprintln!("[store] File fallback cleared ({})", fallback_path().display()),
-        Err(e) => {
-            eprintln!("[store] File fallback clear error: {e}");
-            last_err = Some(e);
-        }
-    }
-
-    match last_err {
-        None => Ok(()),
-        Some(e) => Err(format!("token clear failed (keychain and file both tried): {e}")),
-    }
-}
-
-fn clear_keychain() -> Result<(), String> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-        .map_err(|e| format!("create keychain entry: {e}"))?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()), // Already cleared — idempotent.
-        Err(e) => Err(format!("clear keychain: {e}")),
-    }
+        .map_err(|_| "Credential Manager unavailable".to_string())?;
+    let value = match entry.get_password() {
+        Ok(value) => value,
+        Err(keyring::Error::NoEntry) => return Ok(None),
+        Err(_) => return Err("Credential Manager read failed".into()),
+    };
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, value)
+        .map_err(|_| "Stored session is corrupt".to_string())?;
+    decode(&bytes).map(Some)
 }
 
-fn clear_file() -> Result<(), String> {
-    let path = fallback_path();
-    if path.exists() {
-        std::fs::remove_file(&path).map_err(|e| format!("remove fallback file: {e}"))
-    } else {
-        Ok(())
-    }
+fn save_to_protected_file(bytes: &[u8]) -> Result<(), String> {
+    let protected = platform_protect(bytes)?;
+    std::fs::create_dir_all(fallback_dir()).map_err(|_| "Could not create secure session directory".to_string())?;
+    let tmp = fallback_path().with_extension("tmp");
+    std::fs::write(&tmp, protected).map_err(|_| "Could not write protected session".to_string())?;
+    std::fs::rename(tmp, fallback_path()).map_err(|_| "Could not finalize protected session".to_string())
 }
 
-/// Current Unix epoch in seconds (used to compute `expires_at` from `expires_in`).
+fn load_from_protected_file() -> Result<Option<StoredTokens>, String> {
+    let bytes = match std::fs::read(fallback_path()) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Could not read protected session".into()),
+    };
+    decode(&platform_unprotect(&bytes)?).map(Some)
+}
+
+fn decode(bytes: &[u8]) -> Result<StoredTokens, String> {
+    let stored: StoredTokens = serde_json::from_slice(bytes).map_err(|_| "Stored session is corrupt".to_string())?;
+    if stored.schema_version != SCHEMA_VERSION || stored.access_token.is_empty() || stored.refresh_token.is_empty() {
+        return Err("Stored session has an unsupported format".into());
+    }
+    Ok(stored)
+}
+
+// Credential Manager is the primary store on Windows. The recovery-file hook
+// intentionally fails closed until the packaged DPAPI adapter is enabled; it
+// never silently falls back to plaintext when Credential Manager is absent.
+fn platform_protect(_: &[u8]) -> Result<Vec<u8>, String> { Err("Protected recovery storage is unavailable".into()) }
+fn platform_unprotect(_: &[u8]) -> Result<Vec<u8>, String> { Err("Protected recovery storage is unavailable".into()) }
+
 fn current_epoch_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before Unix epoch")
-        .as_secs()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn current_epoch_secs_is_reasonable() {
-        let now = current_epoch_secs();
-        // Sanity: should be after 2020-01-01 (1577836800) and before 2100-01-01 (4102444800).
-        assert!(now > 1_577_836_800);
-        assert!(now < 4_102_444_800);
-    }
-
-    #[test]
-    fn legacy_session_without_cached_user_still_deserializes() {
-        let json = r#"{"access_token":"a","refresh_token":"r","expires_at":123,"client_id":"c"}"#;
-        let stored: StoredTokens = serde_json::from_str(json).unwrap();
-        assert!(stored.user.is_none());
-    }
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
 }

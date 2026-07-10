@@ -23,7 +23,7 @@
  * it via wrapper callbacks (keeps hooks decoupled, no circular deps).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useAction } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import {
@@ -101,6 +101,8 @@ export function useGroupVoice(myUserId: Id<"users"> | null): UseGroupVoiceResult
   const audioContainerRef = useRef<HTMLDivElement | null>(null);
 
   const mintTokenAction = useAction(api.livekit.mintToken);
+  const announceJoin = useMutation(api.voicePresence.join);
+  const announceLeave = useMutation(api.voicePresence.leave);
 
   // Keep statusRef in sync.
   useEffect(() => {
@@ -254,7 +256,8 @@ export function useGroupVoice(myUserId: Id<"users"> | null): UseGroupVoiceResult
     setDeafenedState(false);
     setError(null);
     cleanup();
-  }, [cleanup]);
+    if (myUserId) void announceLeave({ userId: myUserId });
+  }, [cleanup, announceLeave, myUserId]);
 
   /** Join the voice room (D5 — single-click). */
   const join = useCallback(async () => {
@@ -325,6 +328,7 @@ export function useGroupVoice(myUserId: Id<"users"> | null): UseGroupVoiceResult
       playJoinSound();
 
       setStatus("connected");
+      await announceJoin({ userId: myUserId });
     } catch (e) {
       console.error(`${LOG_PREFIX} join failed:`, e);
       setError(e instanceof Error ? e.message : "Failed to join voice");
@@ -335,6 +339,7 @@ export function useGroupVoice(myUserId: Id<"users"> | null): UseGroupVoiceResult
     myUserId,
     status,
     mintTokenAction,
+    announceJoin,
     registerEvents,
     refreshParticipants,
     speakingIds,

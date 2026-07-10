@@ -1,7 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 
-const CLIENT_ID = import.meta.env.VITE_DISCORD_CLIENT_ID;
-
 /**
  * Kick off the Discord OAuth2 + PKCE flow. The Rust `start_discord_login`
  * command generates a PKCE verifier + CSRF state, opens the system browser
@@ -14,12 +12,7 @@ const CLIENT_ID = import.meta.env.VITE_DISCORD_CLIENT_ID;
  * (PKCE public client).
  */
 export function startDiscordLogin(): Promise<void> {
-  if (!CLIENT_ID) {
-    throw new Error(
-      "VITE_DISCORD_CLIENT_ID is not set. Copy .env.example to .env.local and set VITE_DISCORD_CLIENT_ID.",
-    );
-  }
-  return invoke<void>("start_discord_login", { clientId: CLIENT_ID });
+  return invoke<void>("start_discord_login");
 }
 
 /**

@@ -42,8 +42,7 @@ pub async fn fetch_me(client: &Client, access_token: &str) -> Result<DiscordUser
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("/users/@me failed ({status}): {body}"));
+        return Err(format!("/users/@me failed ({status})"));
     }
 
     resp.json::<DiscordUser>()
