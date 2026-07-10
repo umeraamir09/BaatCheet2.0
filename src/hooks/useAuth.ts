@@ -17,13 +17,18 @@ export function useAuth() {
 
   // TG5: restore session on cold start.
   useEffect(() => {
-    console.log("[useAuth] Attempting session restore...");
+    const start = performance.now();
+    const logTiming = (label: string) =>
+      `${label} [${((performance.now() - start) / 1000).toFixed(2)}s]`;
+    console.log(logTiming("[useAuth] Attempting session restore..."));
     getCurrentSession()
       .then((u) => {
         if (u) {
-          console.log("[useAuth] Session restored successfully:", {
+          console.log(logTiming("[useAuth] Session restored successfully:"), {
             id: u.id,
             username: u.username,
+            displayName: u.displayName,
+            avatarUrl: u.avatarUrl?.slice(0, 60),
           });
           setUser(u);
           setStatus("success");
@@ -33,14 +38,14 @@ export function useAuth() {
             username: u.username,
             displayName: u.displayName,
             avatarUrl: u.avatarUrl,
-          }).catch((e) => console.error("[useAuth] Convex upsertUser failed:", e));
+          }).catch((e) => console.error(logTiming("[useAuth] Convex upsertUser failed:"), e));
         } else {
-          console.log("[useAuth] No session found, user needs to login");
+          console.warn(logTiming("[useAuth] Session restore returned null — no saved session"));
           setStatus("idle");
         }
       })
       .catch((e) => {
-        console.error("[useAuth] Session restore failed:", e);
+        console.error(logTiming("[useAuth] Session restore threw:"), e);
         setError(`Could not restore the saved session: ${String(e)}`);
         setStatus("failed");
       });

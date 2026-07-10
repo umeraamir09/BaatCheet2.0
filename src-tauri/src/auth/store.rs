@@ -1,5 +1,6 @@
 use crate::auth::{oauth::TokenSet, profile::User};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// OS keychain service name (Windows Credential Manager / macOS Keychain / Linux Secret Service).
 const KEYCHAIN_SERVICE: &str = "baatcheet";
@@ -21,9 +22,21 @@ pub struct StoredTokens {
     pub user: Option<User>,
 }
 
-/// Save the token set to the OS keychain. The `TokenSet` from Discord (which
-/// has relative `expires_in`) is converted to absolute `expires_at` before storage.
-/// The `client_id` is persisted alongside tokens so refresh works on cold start.
+/// Directory for file-based fallback storage (resolved lazily from `dirs::data_dir()`).
+fn fallback_dir() -> PathBuf {
+    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+    base.join("baatcheet")
+}
+
+/// File path for the fallback token store.
+fn fallback_path() -> PathBuf {
+    fallback_dir().join("discord_tokens.json")
+}
+
+/// Save the token set to BOTH the OS keychain AND a file-based fallback.
+/// The `TokenSet` from Discord (which has relative `expires_in`) is converted
+/// to absolute `expires_at` before storage. The `client_id` is persisted
+/// alongside tokens so refresh works on cold start.
 pub fn save(tokens: &TokenSet, client_id: Option<&str>, user: Option<&User>) -> Result<(), String> {
     let expires_at = current_epoch_secs() + tokens.expires_in;
     let stored = StoredTokens {
@@ -33,10 +46,40 @@ pub fn save(tokens: &TokenSet, client_id: Option<&str>, user: Option<&User>) -> 
         client_id: client_id.map(|s| s.to_string()),
         user: user.cloned(),
     };
-    save_stored(&stored)
+
+    let mut last_err = None;
+
+    // Always try keychain first.
+    match save_to_keychain(&stored) {
+        Ok(()) => eprintln!("[store] Keychain save succeeded"),
+        Err(e) => {
+            eprintln!("[store] Keychain save failed (non-fatal, using file fallback): {e}");
+            last_err = Some(e);
+        }
+    }
+
+    // Always write to file fallback too.
+    match save_to_file(&stored) {
+        Ok(()) => eprintln!("[store] File fallback save succeeded ({})", fallback_path().display()),
+        Err(e) => {
+            eprintln!("[store] File fallback save failed: {e}");
+            last_err = Some(e);
+        }
+    }
+
+    match last_err {
+        None => Ok(()),
+        Some(e) => Err(format!("token save failed (keychain and file both tried): {e}")),
+    }
 }
 
 pub fn save_stored(stored: &StoredTokens) -> Result<(), String> {
+    save_to_keychain(stored)?;
+    save_to_file(stored).ok(); // non-fatal
+    Ok(())
+}
+
+fn save_to_keychain(stored: &StoredTokens) -> Result<(), String> {
     let json = serde_json::to_string(&stored).map_err(|e| format!("serialize tokens: {e}"))?;
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
         .map_err(|e| format!("create keychain entry: {e}"))?;
@@ -45,30 +88,162 @@ pub fn save_stored(stored: &StoredTokens) -> Result<(), String> {
         .map_err(|e| format!("save to keychain: {e}"))
 }
 
-/// Load the token set from the OS keychain. Returns `None` if no entry exists
-/// (first launch or after logout).
+fn save_to_file(stored: &StoredTokens) -> Result<(), String> {
+    let dir = fallback_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("create fallback dir {}: {e}", dir.display()))?;
+    let json = serde_json::to_string_pretty(&stored)
+        .map_err(|e| format!("serialize tokens: {e}"))?;
+    let path = fallback_path();
+    std::fs::write(&path, &json)
+        .map_err(|e| format!("write fallback file {}: {e}", path.display()))
+}
+
+/// Load the token set from the OS keychain, falling back to a file-based store.
+/// Returns `None` if no entry exists (first launch or after logout).
 pub fn load() -> Result<Option<StoredTokens>, String> {
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-        .map_err(|e| format!("create keychain entry: {e}"))?;
+    // Try keychain first.
+    match load_from_keychain() {
+        Ok(Some(stored)) => {
+            eprintln!("[store] Loaded from keychain successfully");
+            return Ok(Some(stored));
+        }
+        Ok(None) => {
+            eprintln!("[store] Keychain has no entry — checking file fallback...");
+        }
+        Err(e) => {
+            eprintln!("[store] Keychain load error: {e}");
+        }
+    }
+
+    // Fall back to file.
+    load_from_file()
+}
+
+fn load_from_keychain() -> Result<Option<StoredTokens>, String> {
+    let entry_result = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT);
+    let entry = match entry_result {
+        Ok(e) => e,
+        Err(err) => {
+            eprintln!("[store] keyring::Entry::new failed: {err}");
+            return Err(format!("create keychain entry: {err}"));
+        }
+    };
     match entry.get_password() {
         Ok(json) => {
-            let stored: StoredTokens =
-                serde_json::from_str(&json).map_err(|e| format!("deserialize tokens: {e}"))?;
-            Ok(Some(stored))
+            eprintln!("[store] Keychain raw entry found ({} bytes)", json.len());
+            match serde_json::from_str::<StoredTokens>(&json) {
+                Ok(stored) => {
+                    eprintln!(
+                        "[store] Deserialized OK: expires_at={}, has_client_id={}, has_cached_user={}",
+                        stored.expires_at,
+                        stored.client_id.is_some(),
+                        stored.user.is_some(),
+                    );
+                    Ok(Some(stored))
+                }
+                Err(e) => {
+                    eprintln!("[store] Failed to deserialize keychain JSON: {e}");
+                    eprintln!(
+                        "[store] Raw JSON (first 500 chars): {}",
+                        &json[..json.len().min(500)]
+                    );
+                    Err(format!("deserialize tokens: {e}"))
+                }
+            }
         }
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("load from keychain: {e}")),
+        Err(keyring::Error::NoEntry) => {
+            eprintln!("[store] No keychain entry for 'baatcheet'/'discord_tokens' (NoEntry)");
+            Ok(None)
+        }
+        Err(e) => {
+            eprintln!("[store] Keychain access error (not NoEntry): {e:?}");
+            Err(format!("load from keychain: {e}"))
+        }
     }
 }
 
-/// Clear the token set from the OS keychain (spec task 7.1 — log out).
+fn load_from_file() -> Result<Option<StoredTokens>, String> {
+    let path = fallback_path();
+    if !path.exists() {
+        eprintln!("[store] File fallback does not exist at {}", path.display());
+        return Ok(None);
+    }
+
+    match std::fs::read_to_string(&path) {
+        Ok(json) => {
+            eprintln!("[store] File fallback read ({} bytes)", json.len());
+            match serde_json::from_str::<StoredTokens>(&json) {
+                Ok(stored) => {
+                    eprintln!(
+                        "[store] File fallback deserialized OK: expires_at={}, has_client_id={}, has_cached_user={}",
+                        stored.expires_at,
+                        stored.client_id.is_some(),
+                        stored.user.is_some(),
+                    );
+                    Ok(Some(stored))
+                }
+                Err(e) => {
+                    eprintln!("[store] Failed to deserialize file fallback JSON: {e}");
+                    eprintln!(
+                        "[store] Raw file JSON (first 500 chars): {}",
+                        &json[..json.len().min(500)]
+                    );
+                    Err(format!("deserialize file fallback: {e}"))
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("[store] Failed to read file fallback: {e}");
+            Err(format!("read file fallback: {e}"))
+        }
+    }
+}
+
+/// Clear the token set from BOTH the OS keychain AND the file fallback.
 pub fn clear() -> Result<(), String> {
+    let mut last_err = None;
+
+    // Clear keychain.
+    match clear_keychain() {
+        Ok(()) => eprintln!("[store] Keychain cleared"),
+        Err(e) => {
+            eprintln!("[store] Keychain clear error: {e}");
+            last_err = Some(e);
+        }
+    }
+
+    // Clear file fallback.
+    match clear_file() {
+        Ok(()) => eprintln!("[store] File fallback cleared ({})", fallback_path().display()),
+        Err(e) => {
+            eprintln!("[store] File fallback clear error: {e}");
+            last_err = Some(e);
+        }
+    }
+
+    match last_err {
+        None => Ok(()),
+        Some(e) => Err(format!("token clear failed (keychain and file both tried): {e}")),
+    }
+}
+
+fn clear_keychain() -> Result<(), String> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
         .map_err(|e| format!("create keychain entry: {e}"))?;
     match entry.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()), // Already cleared — idempotent.
         Err(e) => Err(format!("clear keychain: {e}")),
+    }
+}
+
+fn clear_file() -> Result<(), String> {
+    let path = fallback_path();
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| format!("remove fallback file: {e}"))
+    } else {
+        Ok(())
     }
 }
 
