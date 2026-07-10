@@ -1,8 +1,10 @@
 import { forwardRef, useRef, useState } from "react";
+import { ImagePlus, Laugh, Send, X } from "lucide-react";
 import { MAX_MESSAGE_LEN } from "./MessageBubble";
 import { EmojiPicker } from "./EmojiPicker";
 import { GifPicker } from "./GifPicker";
 import { hasGiphyKey } from "../../lib/giphy";
+import { IconButton } from "../ui/IconButton";
 
 export interface GifAttachment {
   url: string;
@@ -28,14 +30,6 @@ interface ComposerProps {
   onClearGif: () => void;
 }
 
-/**
- * Message composer — Enter sends, Shift+Enter newline.
- * Includes toolbar for emoji picker, GIF picker, and image upload.
- * Extracted from DMThread (Phase 3) for reuse in LobbyThread (Phase 5).
- *
- * Uses forwardRef so the parent can pass a ref to the textarea for
- * emoji insertion at cursor position.
- */
 export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function Composer(
   {
     value,
@@ -43,7 +37,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
     onKeyDown,
     onSend,
     disabled,
-    placeholder = "Type a message…",
+    placeholder = "Type a message",
     onEmojiInsert,
     onGifSelect,
     onImageSelect,
@@ -59,7 +53,7 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
   const [showGifPicker, setShowGifPicker] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const hasContent = value.trim() || pendingImage || pendingGif;
+  const hasContent = Boolean(value.trim() || pendingImage || pendingGif);
 
   const handleEmojiSelect = (emoji: string) => {
     onEmojiInsert(emoji);
@@ -71,117 +65,42 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
     setShowGifPicker(false);
   };
 
-  const handleImageClick = () => {
-    fileInputRef.current?.click();
-  };
-
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      onImageSelect(file);
-    }
-    // Reset the input so the same file can be selected again
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
+    if (file) onImageSelect(file);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   return (
-    <div className="relative border-t border-white/8">
-      {/* Pending attachments preview */}
+    <div className="border-t border-discord-border bg-discord-bg px-4 pb-4 pt-3">
       {(pendingImagePreview || pendingGif) && (
-        <div className="flex gap-2 px-4 pt-2">
+        <div className="mb-3 flex gap-2 rounded-xl bg-discord-surface p-2">
           {pendingImagePreview && (
-            <div className="relative">
-              <img
-                src={pendingImagePreview}
-                alt="Pending"
-                className="h-16 w-16 rounded object-cover"
-              />
-              <button
-                onClick={onClearImage}
-                className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-xs text-white hover:bg-red-700"
-              >
-                ×
-              </button>
-            </div>
+            <PendingPreview src={pendingImagePreview} alt="Pending upload" onClear={onClearImage} />
           )}
           {pendingGif && (
-            <div className="relative">
-              <img
-                src={pendingGif.url}
-                alt={pendingGif.alt}
-                className="h-16 w-16 rounded object-cover"
-              />
-              <button
-                onClick={onClearGif}
-                className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-xs text-white hover:bg-red-700"
-              >
-                ×
-              </button>
-            </div>
+            <PendingPreview src={pendingGif.url} alt={pendingGif.alt} onClear={onClearGif} />
           )}
         </div>
       )}
 
-      {/* Toolbar + textarea */}
-      <div className="flex items-end gap-2 px-4 py-3">
-        {/* Toolbar buttons */}
-        <div className="flex items-center gap-1 pb-1">
-          {/* Emoji button */}
-          <div className="relative">
-            <button
-              onClick={() => {
-                setShowEmojiPicker(!showEmojiPicker);
-                setShowGifPicker(false);
-              }}
-              className="rounded p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
-              title="Emoji"
-            >
-              <EmojiIcon />
-            </button>
-            {showEmojiPicker && (
-              <EmojiPicker onSelect={handleEmojiSelect} onClose={() => setShowEmojiPicker(false)} />
-            )}
-          </div>
+      <div className="flex items-end gap-2 rounded-2xl bg-discord-surface px-2 py-2 ring-1 ring-discord-border focus-within:ring-discord-focus">
+        <IconButton
+          label="Upload image"
+          variant="ghost"
+          size="sm"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <ImagePlus size={18} />
+        </IconButton>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handleFileChange}
+          className="hidden"
+        />
 
-          {/* GIF button */}
-          {hasGiphyKey() && (
-            <div className="relative">
-              <button
-                onClick={() => {
-                  setShowGifPicker(!showGifPicker);
-                  setShowEmojiPicker(false);
-                }}
-                className="rounded p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
-                title="GIF"
-              >
-                <GifIcon />
-              </button>
-              {showGifPicker && (
-                <GifPicker onSelect={handleGifSelect} onClose={() => setShowGifPicker(false)} />
-              )}
-            </div>
-          )}
-
-          {/* Image upload button */}
-          <button
-            onClick={handleImageClick}
-            className="rounded p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
-            title="Upload image"
-          >
-            <ImageIcon />
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            onChange={handleFileChange}
-            className="hidden"
-          />
-        </div>
-
-        {/* Textarea */}
         <textarea
           ref={ref}
           value={value}
@@ -189,83 +108,72 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
           onKeyDown={onKeyDown}
           placeholder={placeholder}
           rows={1}
-          className="max-h-32 flex-1 resize-none rounded bg-discord-surface px-3 py-2 text-sm text-white/90 placeholder:text-white/35 focus:outline-none focus:ring-1 focus:ring-discord-blurple"
+          className="max-h-32 min-h-9 flex-1 resize-none bg-transparent px-1 py-2 text-[15px] leading-5 text-discord-text placeholder:text-discord-subtle focus:outline-none"
         />
-        <button
+
+        <div className="relative">
+          <IconButton
+            label="Emoji"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setShowEmojiPicker(!showEmojiPicker);
+              setShowGifPicker(false);
+            }}
+          >
+            <Laugh size={18} />
+          </IconButton>
+          {showEmojiPicker && (
+            <EmojiPicker onSelect={handleEmojiSelect} onClose={() => setShowEmojiPicker(false)} />
+          )}
+        </div>
+
+        {hasGiphyKey() && (
+          <div className="relative">
+            <IconButton
+              label="GIF"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setShowGifPicker(!showGifPicker);
+                setShowEmojiPicker(false);
+              }}
+            >
+              <span className="text-[10px] font-bold tracking-wide">GIF</span>
+            </IconButton>
+            {showGifPicker && (
+              <GifPicker onSelect={handleGifSelect} onClose={() => setShowGifPicker(false)} />
+            )}
+          </div>
+        )}
+
+        <IconButton
+          label="Send message"
+          variant={hasContent ? "selected" : "default"}
+          size="sm"
           onClick={onSend}
           disabled={disabled || !hasContent}
-          className="rounded bg-discord-blurple px-4 py-2 text-sm font-medium text-white hover:bg-discord-blurple-hover disabled:opacity-40"
         >
-          Send
-        </button>
+          <Send size={17} />
+        </IconButton>
       </div>
     </div>
   );
 });
 
-function EmojiIcon() {
+function PendingPreview({ src, alt, onClear }: { src: string; alt: string; onClear: () => void }) {
   return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="10" />
-      <path d="M8 14s1.5 2 4 2 4-2 4-2" />
-      <line x1="9" y1="9" x2="9.01" y2="9" />
-      <line x1="15" y1="9" x2="15.01" y2="9" />
-    </svg>
-  );
-}
-
-function GifIcon() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="2" y="4" width="20" height="16" rx="2" />
-      <text
-        x="12"
-        y="15"
-        textAnchor="middle"
-        fontSize="8"
-        fill="currentColor"
-        stroke="none"
-        fontWeight="bold"
+    <div className="relative">
+      <img src={src} alt={alt} className="h-16 w-16 rounded-lg object-cover" />
+      <button
+        type="button"
+        onClick={onClear}
+        aria-label={`Remove ${alt}`}
+        title={`Remove ${alt}`}
+        className="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-discord-danger text-white shadow hover:bg-discord-danger-hover"
       >
-        GIF
-      </text>
-    </svg>
-  );
-}
-
-function ImageIcon() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-      <circle cx="8.5" cy="8.5" r="1.5" />
-      <polyline points="21 15 16 10 5 21" />
-    </svg>
+        <X size={14} />
+      </button>
+    </div>
   );
 }

@@ -1,20 +1,18 @@
-/**
- * Phase 4 — In-call controls (Decision D12).
- *
- * Floating bar rendered in AuthenticatedLayout over the main pane, independent
- * of the active DM. User can browse DMs mid-call. Hosts the hidden <audio>
- * element whose srcObject the hook sets on onRemoteStream.
- *
- * Controls: mute toggle, deafen toggle, leave button, live mm:ss timer, peer
- * avatar + name, "Connected" / "Connecting…" state. Reuses discord-surface +
- * blurple + green-500 tokens.
- */
+import { Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CallStatus } from "../../hooks/useCall";
+import { IconButton } from "../ui/IconButton";
+
+interface Profile {
+  displayName: string | null;
+  username: string;
+  avatarUrl: string;
+}
 
 interface CallControlsProps {
   status: CallStatus;
-  peerProfile: { displayName: string | null; username: string; avatarUrl: string } | null;
+  localProfile: Profile;
+  peerProfile: Profile | null;
   muted: boolean;
   deafened: boolean;
   onMute: (muted: boolean) => void;
@@ -25,6 +23,7 @@ interface CallControlsProps {
 
 export function CallControls({
   status,
+  localProfile,
   peerProfile,
   muted,
   deafened,
@@ -37,9 +36,7 @@ export function CallControls({
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevStatusRef = useRef<CallStatus>(status);
 
-  // Timer — starts when connected, stops when not. Reset elapsed on status change.
   useEffect(() => {
-    // Reset elapsed when status changes away from connected.
     if (prevStatusRef.current === "connected" && status !== "connected") {
       setElapsed(0);
     }
@@ -49,11 +46,9 @@ export function CallControls({
       intervalRef.current = setInterval(() => {
         setElapsed((prev) => prev + 1);
       }, 1000);
-    } else {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+    } else if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
     }
 
     return () => {
@@ -65,68 +60,88 @@ export function CallControls({
   }, [status]);
 
   const peerName = peerProfile?.displayName ?? peerProfile?.username ?? "Unknown";
-  const statusText = status === "connected" ? "Connected" : "Connecting…";
-  const statusColor = status === "connected" ? "text-green-500" : "text-white/60";
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  };
+  const statusText = status === "connected" ? formatTime(elapsed) : "Connecting...";
 
   return (
-    <div className="fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-lg bg-discord-surface px-4 py-3 shadow-lg">
-      <div className="flex items-center gap-4">
-        {/* Peer info */}
-        {peerProfile?.avatarUrl && (
-          <img
-            src={peerProfile.avatarUrl}
-            alt={`${peerName} avatar`}
-            className="h-10 w-10 rounded-full"
+    <div className="fixed inset-0 z-50 flex flex-col bg-black/95 text-discord-text">
+      <div className="flex flex-1 flex-col items-center justify-center gap-8">
+        <div className="flex items-center justify-center">
+          <Avatar profile={peerProfile} label={peerName} large dimmed={status !== "connected"} />
+          <Avatar
+            profile={localProfile}
+            label={localProfile.displayName ?? localProfile.username}
+            large
           />
-        )}
-        <div className="flex flex-col">
-          <p className="text-sm font-medium text-white">{peerName}</p>
-          <p className={`text-xs ${statusColor}`}>
-            {status === "connected" ? formatTime(elapsed) : statusText}
-          </p>
         </div>
-
-        {/* Controls */}
-        <div className="flex gap-2">
-          <button
-            onClick={() => onMute(!muted)}
-            className={`rounded px-3 py-1.5 text-sm font-medium ${
-              muted
-                ? "bg-red-600 text-white hover:bg-red-700"
-                : "bg-white/10 text-white hover:bg-white/20"
-            }`}
-            title={muted ? "Unmute" : "Mute"}
-          >
-            {muted ? "Unmute" : "Mute"}
-          </button>
-          <button
-            onClick={() => onDeafen(!deafened)}
-            className={`rounded px-3 py-1.5 text-sm font-medium ${
-              deafened
-                ? "bg-red-600 text-white hover:bg-red-700"
-                : "bg-white/10 text-white hover:bg-white/20"
-            }`}
-            title={deafened ? "Undeafen" : "Deafen"}
-          >
-            {deafened ? "Undeafen" : "Deafen"}
-          </button>
-          <button
-            onClick={onLeave}
-            className="rounded bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
-          >
-            Leave
-          </button>
+        <div className="text-center">
+          <p className="text-xl font-semibold">{peerName}</p>
+          <p className="mt-1 text-sm text-discord-muted">{statusText}</p>
         </div>
       </div>
 
-      {/* Hidden <audio> element for remote stream */}
+      <div className="flex justify-center pb-8">
+        <div className="flex items-center gap-3 rounded-2xl border border-discord-border bg-discord-elevated/95 px-4 py-3 shadow-2xl">
+          <IconButton
+            label={muted ? "Unmute" : "Mute"}
+            variant={muted ? "danger" : "default"}
+            onClick={() => onMute(!muted)}
+          >
+            {muted ? <MicOff size={20} /> : <Mic size={20} />}
+          </IconButton>
+          <IconButton
+            label={deafened ? "Undeafen" : "Deafen"}
+            variant={deafened ? "danger" : "default"}
+            onClick={() => onDeafen(!deafened)}
+          >
+            {deafened ? <HeadphoneOff size={20} /> : <Headphones size={20} />}
+          </IconButton>
+          <IconButton label="More call options" variant="default">
+            <MoreHorizontal size={20} />
+          </IconButton>
+          <IconButton label="Leave call" variant="danger" size="lg" onClick={onLeave}>
+            <PhoneOff size={22} />
+          </IconButton>
+        </div>
+      </div>
+
       <audio ref={audioRef} autoPlay className="hidden" />
     </div>
   );
+}
+
+function Avatar({
+  profile,
+  label,
+  large = false,
+  dimmed = false,
+}: {
+  profile: Profile | null;
+  label: string;
+  large?: boolean;
+  dimmed?: boolean;
+}) {
+  const size = large ? "h-24 w-24" : "h-10 w-10";
+  return (
+    <div
+      className={`-ml-3 first:ml-0 rounded-full border-4 border-black bg-discord-surface p-1 ${
+        dimmed ? "opacity-60 grayscale" : ""
+      }`}
+    >
+      {profile?.avatarUrl ? (
+        <img src={profile.avatarUrl} alt={`${label} avatar`} className={`${size} rounded-full`} />
+      ) : (
+        <div
+          className={`${size} flex items-center justify-center rounded-full bg-discord-blurple text-2xl font-semibold text-white`}
+        >
+          {label.charAt(0).toUpperCase()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatTime(seconds: number) {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }

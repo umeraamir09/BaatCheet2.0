@@ -1,6 +1,10 @@
 import { findEmojiByNative } from "../../lib/emoji";
 import { getAppleSpritesheetURL } from "../../lib/emojiSpritesheet";
 
+// Must match `sheet` in @emoji-mart/data/sets/15/apple.json.
+const SPRITE_SHEET_COLUMNS = 61;
+const SPRITE_SHEET_LAST_INDEX = SPRITE_SHEET_COLUMNS - 1;
+
 interface AppleEmojiProps {
   native: string;
   size?: string;
@@ -23,8 +27,8 @@ export function AppleEmoji({ native, size = "1.2em" }: AppleEmojiProps) {
         width: size,
         height: size,
         backgroundImage: `url("${getAppleSpritesheetURL()}")`,
-        backgroundPosition: `${(emoji.sheetX / 61) * 100}% ${(emoji.sheetY / 61) * 100}%`,
-        backgroundSize: "6200% 6200%",
+        backgroundPosition: `${(emoji.sheetX / SPRITE_SHEET_LAST_INDEX) * 100}% ${(emoji.sheetY / SPRITE_SHEET_LAST_INDEX) * 100}%`,
+        backgroundSize: `${SPRITE_SHEET_COLUMNS * 100}% ${SPRITE_SHEET_COLUMNS * 100}%`,
       }}
     />
   );

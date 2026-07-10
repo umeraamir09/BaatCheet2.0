@@ -96,7 +96,7 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
     return (
       <div
         ref={containerRef}
-        className="absolute bottom-full left-0 z-50 mb-2 w-80 rounded-lg border border-white/10 bg-discord-surface p-4"
+        className="absolute bottom-full right-0 z-50 mb-2 w-72 rounded-lg border border-white/10 bg-discord-surface p-4 shadow-xl"
       >
         <p className="text-sm text-white/60">
           GIPHY API key not configured. Add{" "}
@@ -109,7 +109,7 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
   return (
     <div
       ref={containerRef}
-      className="absolute bottom-full left-0 z-50 mb-2 flex w-80 flex-col rounded-lg border border-white/10 bg-discord-surface"
+      className="absolute bottom-full right-0 z-50 mb-2 flex w-72 max-h-[min(70vh,420px)] flex-col rounded-lg border border-white/10 bg-discord-surface shadow-xl"
     >
       {/* Search bar */}
       <div className="border-b border-white/10 p-2">
@@ -124,7 +124,7 @@ export function GifPicker({ onSelect, onClose }: GifPickerProps) {
       </div>
 
       {/* GIF grid */}
-      <div className="h-80 overflow-y-auto p-2">
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {loading && gifs.length === 0 ? (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-white/40">Loading...</p>

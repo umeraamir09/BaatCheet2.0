@@ -29,7 +29,7 @@ export function EmojiPicker({ onSelect, onClose }: EmojiPickerProps) {
   }, [onClose]);
 
   return (
-    <div ref={pickerRef} className="absolute bottom-full left-0 z-50 mb-2">
+    <div ref={pickerRef} className="absolute bottom-full right-0 z-50 mb-2 shadow-xl">
       <Picker
         data={appleData}
         set="apple"

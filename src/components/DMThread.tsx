@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Phone } from "lucide-react";
 import { Id } from "../../convex/_generated/dataModel";
 import { useChatThread } from "../hooks/useChatThread";
 import { MessageBubble } from "./chat/MessageBubble";
@@ -87,7 +88,7 @@ export function DMThread({
   return (
     <div className="flex h-full flex-1 flex-col bg-discord-bg">
       {/* Header */}
-      <header className="flex items-center gap-3 border-b border-white/8 px-4 py-3">
+      <header className="flex items-center gap-3 border-b border-discord-border bg-discord-bg px-4 py-3">
         <img
           src={peerProfile?.avatarUrl}
           alt={`${peerName} avatar`}
@@ -102,7 +103,14 @@ export function DMThread({
           <button
             onClick={() => startCallWithPeer(peerUserId, peerProfile)}
             disabled={!peerOnline || callActiveWithPeer}
-            className="rounded bg-discord-blurple p-2 text-white hover:bg-discord-blurple-hover disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-discord-blurple text-white transition-colors hover:bg-discord-blurple-hover disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={
+              !peerOnline
+                ? "Peer is offline"
+                : callActiveWithPeer
+                  ? "Call in progress"
+                  : "Start voice call"
+            }
             title={
               !peerOnline
                 ? "Peer is offline"
@@ -111,16 +119,20 @@ export function DMThread({
                   : "Start voice call"
             }
           >
-            <PhoneIcon />
+            <Phone size={18} />
           </button>
         )}
       </header>
 
       {/* Message list */}
-      <div className="flex-1 overflow-y-auto px-4 py-4">
+      <div className="flex-1 overflow-y-auto py-3">
         {messages.length === 0 && <EmptyThread />}
-        {messages.map((m) => (
-          <MessageBubble key={m._id} message={m} mine={m.senderId === myUserId} />
+        {messages.map((m, index) => (
+          <MessageBubble
+            key={m._id}
+            message={m}
+            previousMessage={index > 0 ? messages[index - 1] : null}
+          />
         ))}
         <div ref={bottomRef} />
       </div>
@@ -158,24 +170,6 @@ function EmptyThread() {
     <div className="flex h-full items-center justify-center">
       <p className="text-sm text-white/45">No messages yet. Say hi!</p>
     </div>
-  );
-}
-
-/** Phone icon for the call button (Phase 4). */
-function PhoneIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
-    </svg>
   );
 }
 

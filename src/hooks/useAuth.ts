@@ -40,7 +40,8 @@ export function useAuth() {
       })
       .catch((e) => {
         console.error("[useAuth] Session restore failed:", e);
-        setStatus("idle");
+        setError(`Could not restore the saved session: ${String(e)}`);
+        setStatus("failed");
       });
   }, [upsertUser]);
 
