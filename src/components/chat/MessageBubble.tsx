@@ -1,7 +1,11 @@
 import type { FunctionReturnType } from "convex/server";
+import { Pencil, SmilePlus, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { api } from "../../../convex/_generated/api";
 import { isEmojiOnlyText, RichContent } from "./RichContent";
 import { LinkPreviewCard, type LinkPreview } from "./LinkPreviewCard";
+import { EmojiPicker } from "./EmojiPicker";
+import { IconButton } from "../ui/IconButton";
 
 /** A single message from the reactive `listMessages` query. */
 export type MessageEntry = NonNullable<
@@ -14,6 +18,10 @@ export const MAX_MESSAGE_LEN = 4000;
 interface MessageBubbleProps {
   message: MessageEntry;
   previousMessage?: MessageEntry | null;
+  myUserId: string;
+  onEdit: (message: MessageEntry) => void;
+  onDelete: (message: MessageEntry) => void;
+  onReact: (message: MessageEntry, emoji: string) => void;
 }
 
 /**
@@ -21,13 +29,22 @@ interface MessageBubbleProps {
  * Every message is left aligned; consecutive messages from the same sender are
  * compacted by hiding the repeated avatar/name/timestamp.
  */
-export function MessageBubble({ message, previousMessage }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  previousMessage,
+  myUserId,
+  onEdit,
+  onDelete,
+  onReact,
+}: MessageBubbleProps) {
+  const [showReactionPicker, setShowReactionPicker] = useState(false);
   const name = message.sender?.displayName ?? message.sender?.username ?? "Unknown";
   const hasText = message.body.trim().length > 0;
   const hasAttachments = message.attachments && message.attachments.length > 0;
   const hasLinkPreview = message.linkPreview != null;
   const grouped = isGroupedMessage(message, previousMessage);
   const emojiOnly = hasText && isEmojiOnlyText(message.body);
+  const isAuthor = message.senderId === myUserId;
 
   return (
     <div
@@ -48,7 +65,48 @@ export function MessageBubble({ message, previousMessage }: MessageBubbleProps) 
           ))}
       </div>
 
-      <div className="min-w-0 flex-1">
+      <div className="relative min-w-0 flex-1">
+        <div className="absolute -top-8 right-0 z-20 hidden items-center rounded-lg border border-discord-border bg-discord-elevated p-1 shadow-lg group-hover:flex focus-within:flex">
+          <div className="relative">
+            <IconButton
+              label="Add reaction"
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowReactionPicker((open) => !open)}
+            >
+              <SmilePlus size={16} />
+            </IconButton>
+            {showReactionPicker && (
+              <EmojiPicker
+                onSelect={(emoji) => {
+                  onReact(message, emoji);
+                  setShowReactionPicker(false);
+                }}
+                onClose={() => setShowReactionPicker(false)}
+              />
+            )}
+          </div>
+          {isAuthor && (
+            <IconButton
+              label="Edit message"
+              variant="ghost"
+              size="sm"
+              onClick={() => onEdit(message)}
+            >
+              <Pencil size={16} />
+            </IconButton>
+          )}
+          {isAuthor && (
+            <IconButton
+              label="Delete message"
+              variant="ghost"
+              size="sm"
+              onClick={() => onDelete(message)}
+            >
+              <Trash2 size={16} />
+            </IconButton>
+          )}
+        </div>
         {!grouped && (
           <div className="mb-0.5 flex items-baseline gap-2">
             <span className="font-semibold leading-5 text-discord-text">{name}</span>
@@ -73,11 +131,32 @@ export function MessageBubble({ message, previousMessage }: MessageBubbleProps) 
             }`}
           >
             <RichContent text={message.body} />
+            {message.editedAt && <span className="ml-1 text-xs text-discord-subtle">(edited)</span>}
           </div>
         )}
 
         {hasLinkPreview && message.linkPreview && (
           <LinkPreviewCard preview={message.linkPreview as LinkPreview} />
+        )}
+
+        {message.reactions.length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {message.reactions.map((reaction) => (
+              <button
+                key={reaction.emoji}
+                type="button"
+                onClick={() => onReact(message, reaction.emoji)}
+                className={`rounded-md border px-2 py-0.5 text-sm transition-colors ${
+                  reaction.reactedByMe
+                    ? "border-discord-blurple bg-discord-blurple/20 text-discord-text"
+                    : "border-discord-border bg-discord-surface text-discord-muted hover:bg-discord-control"
+                }`}
+                aria-label={`Toggle ${reaction.emoji} reaction`}
+              >
+                {reaction.emoji} <span className="text-xs">{reaction.count}</span>
+              </button>
+            ))}
+          </div>
         )}
       </div>
     </div>

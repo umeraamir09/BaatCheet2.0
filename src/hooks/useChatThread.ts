@@ -21,6 +21,9 @@ export interface UseChatThreadResult {
   typingPeers: NonNullable<FunctionReturnType<typeof api.typing.listTyping>>;
   /** Send a message with optional attachments. Clears nothing — caller clears input. */
   send: (body: string, attachments?: SendAttachment[]) => Promise<void>;
+  edit: (messageId: Id<"messages">, body: string) => Promise<void>;
+  remove: (messageId: Id<"messages">) => Promise<void>;
+  toggleReaction: (messageId: Id<"messages">, emoji: string) => Promise<void>;
   /** Notify that the caller is typing (debounced ~300ms). Called on composer keystroke. */
   notifyTyping: () => void;
 }
@@ -42,6 +45,9 @@ export function useChatThread(
   myUserId: Id<"users"> | null,
 ): UseChatThreadResult {
   const sendMessage = useMutation(api.messages.sendMessage);
+  const editMessage = useMutation(api.messages.editMessage);
+  const deleteMessage = useMutation(api.messages.deleteMessage);
+  const toggleReactionMutation = useMutation(api.messages.toggleReaction);
   const setTyping = useMutation(api.typing.setTyping);
   const generateUploadUrl = useMutation(api.storage.generateUploadUrl);
 
@@ -49,7 +55,7 @@ export function useChatThread(
 
   const messages = useQuery(
     api.messages.listMessages,
-    ready ? { conversationId: conversationId! } : "skip",
+    ready ? { conversationId: conversationId!, viewerId: myUserId! } : "skip",
   );
   const typingPeers = useQuery(
     api.typing.listTyping,
@@ -124,6 +130,30 @@ export function useChatThread(
     [ready, conversationId, myUserId, sendMessage, generateUploadUrl],
   );
 
+  const edit = useCallback(
+    async (messageId: Id<"messages">, body: string) => {
+      if (!ready) return;
+      await editMessage({ messageId, userId: myUserId!, body: body.slice(0, MAX_MESSAGE_LEN) });
+    },
+    [editMessage, myUserId, ready],
+  );
+
+  const remove = useCallback(
+    async (messageId: Id<"messages">) => {
+      if (!ready) return;
+      await deleteMessage({ messageId, userId: myUserId! });
+    },
+    [deleteMessage, myUserId, ready],
+  );
+
+  const toggleReaction = useCallback(
+    async (messageId: Id<"messages">, emoji: string) => {
+      if (!ready) return;
+      await toggleReactionMutation({ messageId, userId: myUserId!, emoji });
+    },
+    [myUserId, ready, toggleReactionMutation],
+  );
+
   // Clear the typing debounce timer on unmount / conversation switch.
   useEffect(() => {
     return () => {
@@ -138,6 +168,9 @@ export function useChatThread(
     messages: messages ?? [],
     typingPeers: typingPeers ?? [],
     send,
+    edit,
+    remove,
+    toggleReaction,
     notifyTyping,
   };
 }

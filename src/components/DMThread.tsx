@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Phone } from "lucide-react";
 import { Id } from "../../convex/_generated/dataModel";
 import { useChatThread } from "../hooks/useChatThread";
-import { MessageBubble } from "./chat/MessageBubble";
+import { MessageBubble, type MessageEntry } from "./chat/MessageBubble";
 import { Composer } from "./chat/Composer";
 import { useComposerState } from "../hooks/useComposerState";
 
@@ -21,6 +21,7 @@ interface DMThreadProps {
   peerOnline: boolean;
   startCallWithPeer: (peerUserId: Id<"users">, peerProfile: PeerProfile) => void;
   callActiveWithPeer: boolean;
+  callPanel?: ReactNode;
 }
 
 /**
@@ -42,11 +43,16 @@ export function DMThread({
   peerOnline,
   startCallWithPeer,
   callActiveWithPeer,
+  callPanel,
 }: DMThreadProps) {
-  const { messages, typingPeers, send, notifyTyping } = useChatThread(conversationId, myUserId);
+  const { messages, typingPeers, send, edit, remove, toggleReaction, notifyTyping } = useChatThread(
+    conversationId,
+    myUserId,
+  );
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [editingMessage, setEditingMessage] = useState<MessageEntry | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composer = useComposerState(textareaRef);
@@ -63,9 +69,14 @@ export function DMThread({
     if ((!hasText && !attachments) || sending) return;
     setSending(true);
     try {
-      await send(input, attachments);
+      if (editingMessage) {
+        await edit(editingMessage._id, input);
+        setEditingMessage(null);
+      } else {
+        await send(input, attachments);
+        composer.clearAttachments();
+      }
       setInput("");
-      composer.clearAttachments();
     } catch (e) {
       console.error("sendMessage failed:", e);
     } finally {
@@ -74,9 +85,47 @@ export function DMThread({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      e.key === "ArrowUp" &&
+      !input &&
+      !editingMessage &&
+      !composer.pendingImage &&
+      !composer.pendingGif
+    ) {
+      const newest = [...messages]
+        .reverse()
+        .find(
+          (message) =>
+            message.senderId === myUserId && Date.now() <= message.createdAt + 15 * 60 * 1000,
+        );
+      if (newest) {
+        e.preventDefault();
+        setEditingMessage(newest);
+        setInput(newest.body);
+      }
+      return;
+    }
+    if (e.key === "Escape" && editingMessage) {
+      e.preventDefault();
+      setEditingMessage(null);
+      setInput("");
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
+    }
+  };
+
+  const startEditing = (message: MessageEntry) => {
+    setEditingMessage(message);
+    setInput(message.body);
+    textareaRef.current?.focus();
+  };
+
+  const deleteMessage = (message: MessageEntry) => {
+    if (window.confirm("Delete this message permanently?")) {
+      void remove(message._id).catch((error) => console.error("deleteMessage failed:", error));
     }
   };
 
@@ -124,6 +173,8 @@ export function DMThread({
         )}
       </header>
 
+      {callPanel}
+
       {/* Message list */}
       <div className="flex-1 overflow-y-auto py-3">
         {messages.length === 0 && <EmptyThread />}
@@ -132,6 +183,14 @@ export function DMThread({
             key={m._id}
             message={m}
             previousMessage={index > 0 ? messages[index - 1] : null}
+            myUserId={myUserId}
+            onEdit={startEditing}
+            onDelete={deleteMessage}
+            onReact={(message, emoji) =>
+              void toggleReaction(message._id, emoji).catch((error) =>
+                console.error("toggleReaction failed:", error),
+              )
+            }
           />
         ))}
         <div ref={bottomRef} />
@@ -159,6 +218,11 @@ export function DMThread({
         onClearImage={composer.handleClearImage}
         pendingGif={composer.pendingGif}
         onClearGif={composer.handleClearGif}
+        editingMessage={Boolean(editingMessage)}
+        onCancelEdit={() => {
+          setEditingMessage(null);
+          setInput("");
+        }}
       />
     </div>
   );

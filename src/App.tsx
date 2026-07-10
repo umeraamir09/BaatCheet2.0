@@ -2,7 +2,7 @@ import { useAuth } from "./hooks/useAuth";
 import { AuthenticatedLayout } from "./components/AuthenticatedLayout";
 
 function App() {
-  const { status, user, error, login, logout } = useAuth();
+  const { status, user, error, login, logout, retrySession } = useAuth();
 
   console.log(
     "[App] render — status:",
@@ -66,6 +66,15 @@ function App() {
         </svg>
         <span>{statusText}</span>
       </button>
+      {status === "failed" && (
+        <button
+          type="button"
+          onClick={retrySession}
+          className="rounded-md border border-discord-border px-4 py-2 text-sm text-discord-text hover:bg-discord-control"
+        >
+          Retry saved session
+        </button>
+      )}
       {error && <p className="text-sm text-red-500">{error}</p>}
     </div>
   );

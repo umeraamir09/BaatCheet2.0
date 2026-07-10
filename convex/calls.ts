@@ -58,6 +58,10 @@ export const startCall = mutation({
       connectedAt: null,
       endedAt: null,
       endReason: null,
+      callerMuted: false,
+      callerDeafened: false,
+      calleeMuted: false,
+      calleeDeafened: false,
     });
     console.log(`${LOG_PREFIX} startCall: created call doc ${callId}`);
     return callId;
@@ -229,6 +233,35 @@ export const addIceCandidate = mutation({
         `${LOG_PREFIX} addIceCandidate: callee ICE candidates now ${call.calleeIceCandidates.length + 1}`,
       );
     }
+  },
+});
+
+/** Synchronize discrete mute/deafen state for both 1:1 call participants. */
+export const updateMediaState = mutation({
+  args: {
+    callId: v.id("calls"),
+    userId: v.id("users"),
+    muted: v.boolean(),
+    deafened: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const call = await ctx.db.get(args.callId);
+    if (!call) throw new ConvexError("Call not found");
+    if (call.callerId === args.userId) {
+      await ctx.db.patch(args.callId, {
+        callerMuted: args.muted,
+        callerDeafened: args.deafened,
+      });
+      return;
+    }
+    if (call.calleeId === args.userId) {
+      await ctx.db.patch(args.callId, {
+        calleeMuted: args.muted,
+        calleeDeafened: args.deafened,
+      });
+      return;
+    }
+    throw new ConvexError("Only call participants can update media state");
   },
 });
 

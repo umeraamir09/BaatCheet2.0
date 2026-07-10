@@ -28,6 +28,8 @@ interface ComposerProps {
   onClearImage: () => void;
   pendingGif: GifAttachment | null;
   onClearGif: () => void;
+  editingMessage?: boolean;
+  onCancelEdit?: () => void;
 }
 
 export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function Composer(
@@ -46,6 +48,8 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
     onClearImage,
     pendingGif,
     onClearGif,
+    editingMessage = false,
+    onCancelEdit,
   },
   ref,
 ) {
@@ -73,6 +77,18 @@ export const Composer = forwardRef<HTMLTextAreaElement, ComposerProps>(function 
 
   return (
     <div className="border-t border-discord-border bg-discord-bg px-4 pb-4 pt-3">
+      {editingMessage && (
+        <div className="mb-2 flex items-center justify-between rounded-lg bg-discord-control px-3 py-2 text-sm text-discord-text">
+          <span>Editing message</span>
+          <button
+            type="button"
+            onClick={onCancelEdit}
+            className="text-discord-muted hover:text-discord-text"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       {(pendingImagePreview || pendingGif) && (
         <div className="mb-3 flex gap-2 rounded-xl bg-discord-surface p-2">
           {pendingImagePreview && (

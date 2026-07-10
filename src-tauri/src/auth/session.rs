@@ -121,7 +121,9 @@ pub async fn handle_callback(app: AppHandle, code: String, state: String) {
 /// Loads tokens from the keyring. If the access token is still valid (not
 /// expired or near-expiry), fetches the profile and returns the `User`.
 /// If expired, attempts to refresh using the stored client_id + refresh_token.
-/// If refresh fails or tokens are missing, returns `None`.
+/// A missing or confirmed-revoked session returns `None`. Transient keychain,
+/// network, profile, and persistence failures return an error so the frontend
+/// can offer a retry without treating the user as logged out.
 pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>, String> {
     let stored = match store::load()? {
         Some(s) => s,
@@ -147,16 +149,14 @@ pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>
         let client_id = match stored.client_id {
             Some(cid) => cid,
             None => {
-                eprintln!("[session] No client_id stored, cannot refresh");
-                return Ok(None);
+                return Err("Saved session is missing its Discord client ID; sign in again to repair it".into());
             }
         };
 
         let client = match oauth::http_client() {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("[session] Failed to create HTTP client for refresh: {e}");
-                return Ok(None);
+                return Err(format!("Could not prepare saved-session refresh: {e}"));
             }
         };
 
@@ -164,15 +164,18 @@ pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>
             Ok(new_tokens) => {
                 // Save refreshed tokens with client_id.
                 if let Err(e) = store::save(&new_tokens, Some(&client_id), stored.user.as_ref()) {
-                    eprintln!("[session] Failed to save refreshed tokens: {e}");
-                    return Ok(None);
+                    return Err(format!("Session refreshed but could not be saved: {e}"));
                 }
                 eprintln!("[session] Token refresh successful");
                 (new_tokens.access_token, stored.user)
             }
             Err(e) => {
-                eprintln!("[session] Token refresh failed: {e}");
-                return Ok(None);
+                if is_invalid_refresh_error(&e) {
+                    eprintln!("[session] Stored refresh token is no longer valid; clearing session");
+                    store::clear()?;
+                    return Ok(None);
+                }
+                return Err(format!("Could not refresh saved session; it was kept for retry: {e}"));
             }
         }
     } else {
@@ -200,6 +203,14 @@ pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>
     start_refresh_timer(app);
 
     Ok(Some(user))
+}
+
+fn is_invalid_refresh_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("invalid_grant")
+        || error.contains("invalid refresh")
+        || error.contains("invalid token")
+        || error.contains("401 unauthorized")
 }
 
 /// Start the proactive refresh timer (TG6.2).
@@ -270,8 +281,8 @@ async fn perform_refresh(app: AppHandle) {
     let client = match oauth::http_client() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Failed to create HTTP client: {e}");
-            clear_session_and_emit(&app);
+            eprintln!("[session] Failed to create HTTP client for proactive refresh: {e}");
+            schedule_refresh_retry(app, 60);
             return;
         }
     };
@@ -279,18 +290,38 @@ async fn perform_refresh(app: AppHandle) {
         Ok(tokens) => {
             // Persist client_id alongside refreshed tokens.
             if let Err(e) = store::save(&tokens, Some(&client_id), stored.user.as_ref()) {
-                eprintln!("Failed to save refreshed tokens: {e}");
-                clear_session_and_emit(&app);
+                eprintln!("[session] Failed to persist refreshed tokens: {e}");
+                schedule_refresh_retry(app, 60);
                 return;
             }
             // Reschedule the timer for the new expiry.
             start_refresh_timer(app);
         }
         Err(e) => {
-            eprintln!("Token refresh failed: {e}");
-            clear_session_and_emit(&app);
+            if is_invalid_refresh_error(&e) {
+                eprintln!("[session] Proactive refresh rejected; clearing session");
+                clear_session_and_emit(&app);
+            } else {
+                eprintln!("[session] Proactive refresh failed transiently: {e}");
+                schedule_refresh_retry(app, 60);
+            }
         }
-    }
+    };
+}
+
+/// Retry a transient refresh later without erasing recoverable credentials.
+fn schedule_refresh_retry(app: AppHandle, delay_secs: u64) {
+    let auth_state = app.state::<AuthState>();
+    if let Ok(mut timer) = auth_state.refresh_timer.lock() {
+        if let Some(handle) = timer.take() {
+            handle.abort();
+        }
+        let retry_app = app.clone();
+        *timer = Some(tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+            perform_refresh(retry_app).await;
+        }));
+    };
 }
 
 /// Clear the session from the keychain and emit `discord:needs-login` (TG6.4).
@@ -423,5 +454,18 @@ where
             op(tokens.access_token).await
         }
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_invalid_refresh_error;
+
+    #[test]
+    fn invalid_grant_requires_login_but_network_failures_do_not() {
+        assert!(is_invalid_refresh_error("token refresh failed (400): {\"error\":\"invalid_grant\"}"));
+        assert!(is_invalid_refresh_error("token refresh failed (401 Unauthorized)"));
+        assert!(!is_invalid_refresh_error("token refresh request failed: connection timed out"));
+        assert!(!is_invalid_refresh_error("failed to build HTTP client"));
     }
 }

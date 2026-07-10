@@ -42,6 +42,7 @@ export const fetchLinkPreview = internalAction({
       if (!response.ok) {
         await ctx.runMutation(internal.linkPreviews.storeLinkPreview, {
           messageId: args.messageId,
+          sourceUrl: args.url,
           preview: null,
         });
         return;
@@ -51,6 +52,7 @@ export const fetchLinkPreview = internalAction({
       if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) {
         await ctx.runMutation(internal.linkPreviews.storeLinkPreview, {
           messageId: args.messageId,
+          sourceUrl: args.url,
           preview: null,
         });
         return;
@@ -60,6 +62,7 @@ export const fetchLinkPreview = internalAction({
       if (!reader) {
         await ctx.runMutation(internal.linkPreviews.storeLinkPreview, {
           messageId: args.messageId,
+          sourceUrl: args.url,
           preview: null,
         });
         return;
@@ -82,6 +85,7 @@ export const fetchLinkPreview = internalAction({
 
       await ctx.runMutation(internal.linkPreviews.storeLinkPreview, {
         messageId: args.messageId,
+        sourceUrl: args.url,
         preview: og
           ? {
               url: args.url,
@@ -96,6 +100,7 @@ export const fetchLinkPreview = internalAction({
     } catch {
       await ctx.runMutation(internal.linkPreviews.storeLinkPreview, {
         messageId: args.messageId,
+        sourceUrl: args.url,
         preview: null,
       });
     }
@@ -109,6 +114,7 @@ export const fetchLinkPreview = internalAction({
 export const storeLinkPreview = internalMutation({
   args: {
     messageId: v.id("messages"),
+    sourceUrl: v.string(),
     preview: v.union(
       v.object({
         url: v.string(),
@@ -122,6 +128,10 @@ export const storeLinkPreview = internalMutation({
     ),
   },
   handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (!message) return;
+    const currentUrl = message.body.match(/https?:\/\/[^\s<>"']+/i)?.[0] ?? null;
+    if (currentUrl !== args.sourceUrl) return;
     await ctx.db.patch(args.messageId, { linkPreview: args.preview });
   },
 });

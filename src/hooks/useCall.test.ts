@@ -33,6 +33,7 @@ const mockRejectCall = vi.fn().mockResolvedValue(undefined);
 const mockEndCall = vi.fn().mockResolvedValue(undefined);
 const mockMarkMissed = vi.fn().mockResolvedValue(undefined);
 const mockAddIceCandidate = vi.fn().mockResolvedValue(undefined);
+const mockUpdateMediaState = vi.fn().mockResolvedValue(undefined);
 const mockGetCall = vi.fn().mockReturnValue(null);
 const mockListIncomingCalls = vi.fn().mockReturnValue(null);
 
@@ -51,8 +52,9 @@ vi.mock("convex/react", () => ({
       mockEndCall,
       mockMarkMissed,
       mockAddIceCandidate,
+      mockUpdateMediaState,
     ];
-    const index = mutationCallCount % 6;
+    const index = mutationCallCount % 7;
     mutationCallCount++;
     return mocks[index];
   },
@@ -75,6 +77,7 @@ describe("useCall", () => {
     queryCallCount = 0;
     vi.clearAllMocks();
     mockStartCall.mockResolvedValue("mock-call-id");
+    mockUpdateMediaState.mockResolvedValue(undefined);
     mockGetCall.mockReturnValue(null);
     mockListIncomingCalls.mockReturnValue(null);
   });
@@ -561,6 +564,29 @@ describe("useCall", () => {
       });
 
       expect(mockEndCall).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("media state", () => {
+    it("synchronizes local mute state through the call document", async () => {
+      const { result } = renderHook(() => useCall("user-1" as any));
+
+      await act(async () => {
+        await result.current.startCall("user-2" as any, {
+          displayName: "Test User",
+          username: "testuser",
+          avatarUrl: "https://example.com/avatar.png",
+        });
+      });
+      act(() => result.current.setMuted(true));
+
+      expect(result.current.muted).toBe(true);
+      expect(mockUpdateMediaState).toHaveBeenCalledWith({
+        callId: "mock-call-id",
+        userId: "user-1",
+        muted: true,
+        deafened: false,
+      });
     });
   });
 });

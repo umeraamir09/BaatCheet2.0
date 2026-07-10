@@ -76,7 +76,19 @@ export default defineSchema({
       ),
     ),
     createdAt: v.number(),
+    editedAt: v.optional(v.number()),
   }).index("byConversation", ["conversationId", "createdAt"]), // ordered history
+  messageReactions: defineTable({
+    conversationId: v.id("conversations"),
+    messageId: v.id("messages"),
+    userId: v.id("users"),
+    emoji: v.string(),
+    key: v.string(),
+    createdAt: v.number(),
+  })
+    .index("byConversation", ["conversationId", "createdAt"])
+    .index("byMessage", ["messageId", "createdAt"])
+    .index("byKey", ["key"]),
   // Phase 3 — Typing indicators (Decision D3). No cron: stale docs are
   // invisible via the recency filter in `listTyping` (lastTyped > now - 3000).
   typing: defineTable({
@@ -101,6 +113,10 @@ export default defineSchema({
     connectedAt: v.union(v.number(), v.null()),
     endedAt: v.union(v.number(), v.null()),
     endReason: v.union(v.string(), v.null()),
+    callerMuted: v.optional(v.boolean()),
+    callerDeafened: v.optional(v.boolean()),
+    calleeMuted: v.optional(v.boolean()),
+    calleeDeafened: v.optional(v.boolean()),
   })
     .index("byCallee", ["calleeId", "startedAt"]) // incoming-call toast subscription
     .index("byCaller", ["callerId", "startedAt"]),
