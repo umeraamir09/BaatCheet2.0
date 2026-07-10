@@ -1,16 +1,30 @@
 @import "tailwindcss";
 
 :root {
-  --bg-base: #000000;
-  --fg-base: #ffffff;
+  --bg-base: #0b0d10;
+  --fg-base: #f2f3f5;
 }
 
 @theme {
   --color-discord-blurple: #5865f2;
   --color-discord-blurple-hover: #4752c4;
   --color-discord-light-blurple: #e0e3ff;
-  --color-discord-bg: #000000;
-  --color-discord-surface: #1a1a1a;
+  --color-discord-bg: #0b0d10;
+  --color-discord-sidebar: #111318;
+  --color-discord-surface: #171a21;
+  --color-discord-elevated: #1f232b;
+  --color-discord-control: #242832;
+  --color-discord-control-hover: #2f3440;
+  --color-discord-border: #2a2e37;
+  --color-discord-text: #f2f3f5;
+  --color-discord-muted: #9ca3af;
+  --color-discord-subtle: #6b7280;
+  --color-discord-danger: #da373c;
+  --color-discord-danger-hover: #b82d31;
+  --color-discord-success: #248046;
+  --color-discord-success-hover: #1a6334;
+  --color-discord-warning: #f0b232;
+  --color-discord-focus: #8ea1e1;
 }
 
 body {
@@ -53,4 +67,14 @@ body {
 
 .logo-anim:hover {
   animation-play-state: paused;
+}
+
+/* Constrain emoji-mart Picker so it fits in narrow/normally-sized Tauri windows.
+   The library's default :host height is 435px (good for full-screen web), which
+   overflows the chat area in our composer's bottom-anchored popover and gets
+   clipped on smaller windows. 70vh / 380px cap keeps the picker inside the
+   viewport while still showing a useful 3-4 rows of emojis. */
+em-emoji-picker {
+  height: min(70vh, 380px) !important;
+  max-height: min(70vh, 380px) !important;
 }

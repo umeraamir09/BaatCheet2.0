@@ -69,18 +69,25 @@ pub async fn handle_callback(app: AppHandle, code: String, state: String) {
     let client = match oauth::http_client() {
         Ok(c) => c,
         Err(e) => {
-            let _ = app.emit("discord:login-failed", format!("failed to create HTTP client: {e}"));
+            let _ = app.emit(
+                "discord:login-failed",
+                format!("failed to create HTTP client: {e}"),
+            );
             return;
         }
     };
 
-    let tokens = match oauth::exchange_code(&client, &pending.client_id, &code, &pending.verifier).await {
-        Ok(t) => t,
-        Err(e) => {
-            let _ = app.emit("discord:login-failed", format!("token exchange failed: {e}"));
-            return;
-        }
-    };
+    let tokens =
+        match oauth::exchange_code(&client, &pending.client_id, &code, &pending.verifier).await {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = app.emit(
+                    "discord:login-failed",
+                    format!("token exchange failed: {e}"),
+                );
+                return;
+            }
+        };
 
     let discord_user = match profile::fetch_me(&client, &tokens.access_token).await {
         Ok(u) => u,
@@ -91,12 +98,15 @@ pub async fn handle_callback(app: AppHandle, code: String, state: String) {
     };
 
     // Persist client_id alongside tokens so refresh works on cold start.
-    if let Err(e) = store::save(&tokens, Some(&pending.client_id)) {
-        let _ = app.emit("discord:login-failed", format!("failed to save tokens: {e}"));
+    let user = profile::to_user(&discord_user);
+    if let Err(e) = store::save(&tokens, Some(&pending.client_id), Some(&user)) {
+        let _ = app.emit(
+            "discord:login-failed",
+            format!("failed to save tokens: {e}"),
+        );
         return;
     }
 
-    let user = profile::to_user(&discord_user);
     let _ = app.emit("discord:login-success", user);
 
     // TG6: persist the client_id and start the proactive refresh timer.
@@ -131,7 +141,7 @@ pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>
         }
     }
 
-    let access_token = if stored.expires_at <= now + EXPIRY_MARGIN_SECS {
+    let (access_token, cached_user) = if stored.expires_at <= now + EXPIRY_MARGIN_SECS {
         // Access token expired or near-expiry — attempt refresh.
         eprintln!("[session] Access token expired, attempting refresh...");
         let client_id = match stored.client_id {
@@ -153,12 +163,12 @@ pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>
         match oauth::refresh_tokens(&client, &client_id, &stored.refresh_token).await {
             Ok(new_tokens) => {
                 // Save refreshed tokens with client_id.
-                if let Err(e) = store::save(&new_tokens, Some(&client_id)) {
+                if let Err(e) = store::save(&new_tokens, Some(&client_id), stored.user.as_ref()) {
                     eprintln!("[session] Failed to save refreshed tokens: {e}");
                     return Ok(None);
                 }
                 eprintln!("[session] Token refresh successful");
-                new_tokens.access_token
+                (new_tokens.access_token, stored.user)
             }
             Err(e) => {
                 eprintln!("[session] Token refresh failed: {e}");
@@ -166,17 +176,30 @@ pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>
             }
         }
     } else {
-        stored.access_token
+        (stored.access_token, stored.user)
     };
 
-    // Access token valid (or just refreshed) — fetch profile to derive avatar URL.
+    // Restore the profile that was verified at login. A cold start should not
+    // look like a logout merely because Discord's profile endpoint is briefly
+    // unavailable; token validity is still enforced above and by the timer.
+    if let Some(user) = cached_user {
+        start_refresh_timer(app);
+        return Ok(Some(user));
+    }
+
+    // One-time migration for sessions written before profiles were cached.
     let client = oauth::http_client()?;
     let discord_user = profile::fetch_me(&client, &access_token).await?;
+    let user = profile::to_user(&discord_user);
+    if let Ok(Some(mut current)) = store::load() {
+        current.user = Some(user.clone());
+        store::save_stored(&current)?;
+    }
 
     // TG6: start the proactive refresh timer after successful restore.
     start_refresh_timer(app);
 
-    Ok(Some(profile::to_user(&discord_user)))
+    Ok(Some(user))
 }
 
 /// Start the proactive refresh timer (TG6.2).
@@ -255,7 +278,7 @@ async fn perform_refresh(app: AppHandle) {
     match oauth::refresh_tokens(&client, &client_id, &stored.refresh_token).await {
         Ok(tokens) => {
             // Persist client_id alongside refreshed tokens.
-            if let Err(e) = store::save(&tokens, Some(&client_id)) {
+            if let Err(e) = store::save(&tokens, Some(&client_id), stored.user.as_ref()) {
                 eprintln!("Failed to save refreshed tokens: {e}");
                 clear_session_and_emit(&app);
                 return;
@@ -323,13 +346,16 @@ pub fn dev_set_expires_in(seconds: u64) -> Result<(), String> {
         refresh_token: stored.refresh_token,
         expires_at: new_expires_at,
         client_id: stored.client_id,
+        user: stored.user,
     };
 
     // Save directly to keyring (bypassing the normal save flow).
     let json = serde_json::to_string(&modified).map_err(|e| format!("serialize: {e}"))?;
     let entry = keyring::Entry::new("baatcheet", "discord_tokens")
         .map_err(|e| format!("keyring entry: {e}"))?;
-    entry.set_password(&json).map_err(|e| format!("keyring set: {e}"))?;
+    entry
+        .set_password(&json)
+        .map_err(|e| format!("keyring set: {e}"))?;
     Ok(())
 }
 
@@ -347,13 +373,16 @@ pub fn dev_corrupt_refresh() -> Result<(), String> {
         refresh_token: "corrupted-refresh-token-for-testing".to_string(),
         expires_at: stored.expires_at,
         client_id: stored.client_id,
+        user: stored.user,
     };
 
     // Save directly to keyring.
     let json = serde_json::to_string(&corrupted).map_err(|e| format!("serialize: {e}"))?;
     let entry = keyring::Entry::new("baatcheet", "discord_tokens")
         .map_err(|e| format!("keyring entry: {e}"))?;
-    entry.set_password(&json).map_err(|e| format!("keyring set: {e}"))?;
+    entry
+        .set_password(&json)
+        .map_err(|e| format!("keyring set: {e}"))?;
     Ok(())
 }
 
@@ -388,7 +417,7 @@ where
             let client = oauth::http_client()?;
             let tokens = oauth::refresh_tokens(&client, &client_id, &stored.refresh_token).await?;
             // Persist client_id alongside refreshed tokens.
-            store::save(&tokens, Some(&client_id))?;
+            store::save(&tokens, Some(&client_id), stored.user.as_ref())?;
 
             // Retry with new access token.
             op(tokens.access_token).await

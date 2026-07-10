@@ -101,6 +101,27 @@ function parseSegments(text: string): Segment[] {
   return segments;
 }
 
+/** True when a message has emoji graphemes and optional whitespace only. */
+export function isEmojiOnlyText(text: string): boolean {
+  const segmenterCtor = (Intl as IntlWithSegmenter).Segmenter;
+  const graphemes = segmenterCtor
+    ? Array.from(new segmenterCtor(undefined, { granularity: "grapheme" }).segment(text)).map(
+        ({ segment }) => segment,
+      )
+    : Array.from(text);
+
+  return (
+    graphemes.some((grapheme) =>
+      /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(grapheme),
+    ) &&
+    graphemes.every(
+      (grapheme) =>
+        /^\s*$/u.test(grapheme) ||
+        /[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(grapheme),
+    )
+  );
+}
+
 /**
  * Handle link click — open in system browser.
  */
@@ -112,9 +133,10 @@ function handleLinkClick(href: string) {
 
 export function RichContent({ text }: RichContentProps) {
   const segments = parseSegments(text);
+  const emojiOnly = isEmojiOnlyText(text);
 
   return (
-    <span className="whitespace-pre-wrap break-words">
+    <span className={`whitespace-pre-wrap break-words ${emojiOnly ? "leading-none" : ""}`}>
       {segments.map((segment, i) => {
         if (segment.type === "link") {
           return (
@@ -134,7 +156,9 @@ export function RichContent({ text }: RichContentProps) {
           );
         }
         if (segment.type === "emoji") {
-          return <AppleEmoji key={i} native={segment.value} />;
+          return (
+            <AppleEmoji key={i} native={segment.value} size={emojiOnly ? "2.5em" : undefined} />
+          );
         }
         return <span key={i}>{segment.value}</span>;
       })}

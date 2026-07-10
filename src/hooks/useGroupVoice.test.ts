@@ -88,12 +88,12 @@ describe("useGroupVoice", () => {
     mockRoomInstance.connect.mockClear().mockResolvedValue(undefined);
     mockRoomInstance.disconnect.mockClear().mockResolvedValue(undefined);
     mockRoomInstance.removeAllListeners.mockClear();
-    mockRoomInstance.on.mockClear().mockImplementation(
-      (event: string, handler: (...args: unknown[]) => void) => {
+    mockRoomInstance.on
+      .mockClear()
+      .mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
         mockRoomEventHandlers[event] = handler;
         return mockRoomInstance;
-      },
-    );
+      });
     mockRoomInstance.off.mockClear();
     mockRoomInstance.startAudio.mockClear().mockResolvedValue(undefined);
     Object.keys(mockRoomEventHandlers).forEach((k) => delete mockRoomEventHandlers[k]);
@@ -132,7 +132,7 @@ describe("useGroupVoice", () => {
       // Should have called room.connect
       expect(mockRoomInstance.connect).toHaveBeenCalledWith(
         "wss://livekit.example.com",
-        "mock-jwt-token"
+        "mock-jwt-token",
       );
 
       // Should have enabled microphone

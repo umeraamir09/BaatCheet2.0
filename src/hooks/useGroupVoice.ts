@@ -68,9 +68,11 @@ export interface UseGroupVoiceResult {
 const LEAVE_TIMEOUT_MS = 2_000;
 
 /** Parse participant metadata JSON (set in the token by mintToken). */
-function parseMetadata(
-  metadata: string | undefined,
-): { avatarUrl: string; displayName: string | null; username: string } {
+function parseMetadata(metadata: string | undefined): {
+  avatarUrl: string;
+  displayName: string | null;
+  username: string;
+} {
   if (!metadata) return { avatarUrl: "", displayName: null, username: "" };
   try {
     const parsed = JSON.parse(metadata);
@@ -329,7 +331,15 @@ export function useGroupVoice(myUserId: Id<"users"> | null): UseGroupVoiceResult
       setStatus("disconnected");
       cleanup();
     }
-  }, [myUserId, status, mintTokenAction, registerEvents, refreshParticipants, speakingIds, cleanup]);
+  }, [
+    myUserId,
+    status,
+    mintTokenAction,
+    registerEvents,
+    refreshParticipants,
+    speakingIds,
+    cleanup,
+  ]);
 
   /** Mute/unmute (D7 — Discord semantics). */
   const setMuted = useCallback(
@@ -337,9 +347,9 @@ export function useGroupVoice(myUserId: Id<"users"> | null): UseGroupVoiceResult
       const room = roomRef.current;
       if (!room) return;
       console.log(`${LOG_PREFIX} setMuted: ${m}`);
-      room.localParticipant.setMicrophoneEnabled(!m).catch((e) =>
-        console.error(`${LOG_PREFIX} setMicrophoneEnabled failed:`, e),
-      );
+      room.localParticipant
+        .setMicrophoneEnabled(!m)
+        .catch((e) => console.error(`${LOG_PREFIX} setMicrophoneEnabled failed:`, e));
       setMutedState(m);
       // Refresh participants to update the local mute icon.
       refreshParticipants(room, speakingIds);
@@ -354,9 +364,9 @@ export function useGroupVoice(myUserId: Id<"users"> | null): UseGroupVoiceResult
       if (!room) return;
       console.log(`${LOG_PREFIX} setDeafened: ${d}`);
       // Mute mic (same as mute).
-      room.localParticipant.setMicrophoneEnabled(!d).catch((e) =>
-        console.error(`${LOG_PREFIX} setMicrophoneEnabled (deafen) failed:`, e),
-      );
+      room.localParticipant
+        .setMicrophoneEnabled(!d)
+        .catch((e) => console.error(`${LOG_PREFIX} setMicrophoneEnabled (deafen) failed:`, e));
       // Mute all attached <audio> elements (remote playback).
       audioElementsRef.current.forEach((el) => {
         el.muted = d;

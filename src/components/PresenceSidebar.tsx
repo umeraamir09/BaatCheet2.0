@@ -1,10 +1,12 @@
 import { useQuery } from "convex/react";
+import { ChevronLeft, ChevronRight, LogOut, Settings } from "lucide-react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import type { UsePresenceResult } from "../hooks/usePresence";
 import type { User } from "../auth";
 import type { PeerProfile } from "./DMThread";
+import { IconButton } from "./ui/IconButton";
 
 const MAX_STATUS_LEN = 128;
 
@@ -20,6 +22,7 @@ interface PresenceSidebarProps {
   onToggleCollapse: () => void;
   user: User;
   onLogout: () => Promise<void> | void;
+  onOpenSettings: () => void;
   /** Active conversation id (highlight + restore). */
   activeConversationId: Id<"conversations"> | null;
   /** Active peer user id (for highlighting a friend row before the conv resolves). */
@@ -54,6 +57,7 @@ export function PresenceSidebar({
   onToggleCollapse,
   user,
   onLogout,
+  onOpenSettings,
   activeConversationId,
   activePeerUserId,
   onSelectPeer,
@@ -72,10 +76,11 @@ export function PresenceSidebar({
       <aside className="flex h-full w-12 flex-col items-center gap-3 border-r border-white/10 bg-discord-surface py-3">
         <button
           onClick={onToggleCollapse}
+          aria-label="Expand sidebar"
           title="Expand sidebar"
-          className="text-white/60 hover:text-white"
+          className="text-discord-muted hover:text-discord-text"
         >
-          <ChevronIcon direction="right" />
+          <ChevronRight size={18} />
         </button>
         <div className="flex flex-1 flex-col gap-2 overflow-y-auto">
           {friends.map((p) => (
@@ -99,15 +104,18 @@ export function PresenceSidebar({
   }
 
   return (
-    <aside className="flex h-full w-64 flex-col border-r border-white/10 bg-discord-bg">
-      <div className="flex items-center justify-between border-b border-white/8 px-3 py-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-white/60">BaatCheet</h2>
+    <aside className="flex h-full w-64 flex-col border-r border-discord-border bg-discord-sidebar">
+      <div className="flex items-center justify-between border-b border-discord-border px-3 py-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-discord-muted">
+          BaatCheet
+        </h2>
         <button
           onClick={onToggleCollapse}
+          aria-label="Collapse sidebar"
           title="Collapse sidebar"
-          className="text-white/60 hover:text-white"
+          className="text-discord-muted hover:text-discord-text"
         >
-          <ChevronIcon direction="left" />
+          <ChevronLeft size={18} />
         </button>
       </div>
 
@@ -161,7 +169,7 @@ export function PresenceSidebar({
       </div>
 
       {/* Self + log out footer (replaces the Phase-1 main-pane logout button) */}
-      <footer className="flex items-center gap-2 border-t border-white/8 bg-discord-surface px-2 py-2">
+      <footer className="flex items-center gap-2 border-t border-discord-border bg-discord-surface px-2 py-2">
         <img
           src={user.avatarUrl}
           alt={`${user.username} avatar`}
@@ -173,13 +181,12 @@ export function PresenceSidebar({
           </p>
           <p className="truncate text-xs text-white/60">@{user.username}</p>
         </div>
-        <button
-          onClick={onLogout}
-          title="Log out"
-          className="rounded p-1.5 text-white/60 hover:bg-white/10 hover:text-white"
-        >
-          <LogoutIcon />
-        </button>
+        <IconButton label="Settings" variant="ghost" size="sm" onClick={onOpenSettings}>
+          <Settings size={17} />
+        </IconButton>
+        <IconButton label="Log out" variant="ghost" size="sm" onClick={onLogout}>
+          <LogOut size={17} />
+        </IconButton>
       </footer>
     </aside>
   );
@@ -271,39 +278,5 @@ function StatusInput({
         className="w-full rounded bg-discord-surface px-2 py-1.5 text-sm text-white/90 placeholder:text-white/35 focus:outline-none focus:ring-1 focus:ring-discord-blurple disabled:opacity-50"
       />
     </div>
-  );
-}
-
-function ChevronIcon({ direction }: { direction: "left" | "right" }) {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      className={direction === "right" ? "" : "rotate-180"}
-    >
-      <path
-        d="M10 4L6 8L10 12"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function LogoutIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-      <path
-        d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }
