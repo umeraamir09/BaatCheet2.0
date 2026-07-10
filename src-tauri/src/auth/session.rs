@@ -125,9 +125,20 @@ pub async fn handle_callback(app: AppHandle, code: String, state: String) {
 /// network, profile, and persistence failures return an error so the frontend
 /// can offer a retry without treating the user as logged out.
 pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>, String> {
-    let stored = match store::load()? {
-        Some(s) => s,
-        None => return Ok(None),
+    eprintln!("[session] get_current_session: reading keychain...");
+    let stored = match store::load() {
+        Ok(Some(s)) => {
+            eprintln!("[session] store::load() returned Some — proceeding with expiry check");
+            s
+        }
+        Ok(None) => {
+            eprintln!("[session] store::load() returned None — no saved session in keychain");
+            return Ok(None);
+        }
+        Err(e) => {
+            eprintln!("[session] store::load() returned Err: {e}");
+            return Err(e);
+        }
     };
 
     let auth_state = app.state::<AuthState>();
@@ -136,19 +147,33 @@ pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>
         .expect("system clock before Unix epoch")
         .as_secs();
 
+    eprintln!(
+        "[session] now={now}, expires_at={}, EXPIRY_MARGIN_SECS={EXPIRY_MARGIN_SECS}, threshold={}, expired={}",
+        stored.expires_at,
+        now + EXPIRY_MARGIN_SECS,
+        stored.expires_at <= now + EXPIRY_MARGIN_SECS
+    );
+
     // Restore client_id to AuthState from keychain (needed for refresh).
     if let Some(ref cid) = stored.client_id {
+        eprintln!("[session] Restoring client_id to AuthState (len={})", cid.len());
         if let Ok(mut auth_cid) = auth_state.client_id.lock() {
             *auth_cid = Some(cid.clone());
         }
+    } else {
+        eprintln!("[session] WARNING: stored.client_id is None — refresh won't work if token expires");
     }
 
     let (access_token, cached_user) = if stored.expires_at <= now + EXPIRY_MARGIN_SECS {
         // Access token expired or near-expiry — attempt refresh.
-        eprintln!("[session] Access token expired, attempting refresh...");
+        eprintln!("[session] Access token expired or near-expiry — attempting refresh with stored refresh_token (len={})", stored.refresh_token.len());
         let client_id = match stored.client_id {
-            Some(cid) => cid,
+            Some(ref cid) => {
+                eprintln!("[session] Using stored client_id for refresh");
+                cid.clone()
+            }
             None => {
+                eprintln!("[session] FATAL: saved session has no client_id — returning Err to frontend");
                 return Err("Saved session is missing its Discord client ID; sign in again to repair it".into());
             }
         };
@@ -156,29 +181,36 @@ pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>
         let client = match oauth::http_client() {
             Ok(c) => c,
             Err(e) => {
+                eprintln!("[session] Failed to create HTTP client for refresh: {e}");
                 return Err(format!("Could not prepare saved-session refresh: {e}"));
             }
         };
 
+        eprintln!("[session] Calling oauth::refresh_tokens...");
         match oauth::refresh_tokens(&client, &client_id, &stored.refresh_token).await {
             Ok(new_tokens) => {
+                eprintln!("[session] Refresh succeeded — new access_token (len={}), expires_in={}", new_tokens.access_token.len(), new_tokens.expires_in);
                 // Save refreshed tokens with client_id.
                 if let Err(e) = store::save(&new_tokens, Some(&client_id), stored.user.as_ref()) {
+                    eprintln!("[session] Refresh succeeded but save to keychain failed: {e}");
                     return Err(format!("Session refreshed but could not be saved: {e}"));
                 }
-                eprintln!("[session] Token refresh successful");
+                eprintln!("[session] Refreshed tokens saved to keychain successfully");
                 (new_tokens.access_token, stored.user)
             }
             Err(e) => {
                 if is_invalid_refresh_error(&e) {
-                    eprintln!("[session] Stored refresh token is no longer valid; clearing session");
+                    eprintln!("[session] Refresh failed with invalid_grant — token revoked, clearing session: {e}");
                     store::clear()?;
+                    eprintln!("[session] Keychain cleared, returning None");
                     return Ok(None);
                 }
+                eprintln!("[session] Refresh failed transiently, keeping session for retry: {e}");
                 return Err(format!("Could not refresh saved session; it was kept for retry: {e}"));
             }
         }
     } else {
+        eprintln!("[session] Access token still valid — using cached credentials");
         (stored.access_token, stored.user)
     };
 
@@ -186,20 +218,43 @@ pub async fn get_current_session(app: AppHandle) -> Result<Option<profile::User>
     // look like a logout merely because Discord's profile endpoint is briefly
     // unavailable; token validity is still enforced above and by the timer.
     if let Some(user) = cached_user {
+        eprintln!("[session] Using cached user profile: id={}, username={}", user.id, user.username);
         start_refresh_timer(app);
         return Ok(Some(user));
     }
 
     // One-time migration for sessions written before profiles were cached.
-    let client = oauth::http_client()?;
-    let discord_user = profile::fetch_me(&client, &access_token).await?;
+    eprintln!("[session] No cached user profile — performing one-time migration (fetching /users/@me)");
+    let client = match oauth::http_client() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[session] Failed to create HTTP client for profile migration: {e}");
+            return Err(format!("Could not create HTTP client for profile fetch: {e}"));
+        }
+    };
+    let discord_user = match profile::fetch_me(&client, &access_token).await {
+        Ok(u) => {
+            eprintln!("[session] Fetched Discord user: id={}, username={}", u.id, u.username);
+            u
+        }
+        Err(e) => {
+            eprintln!("[session] Failed to fetch Discord profile even with valid token: {e}");
+            return Err(format!("Failed to verify session with Discord: {e}"));
+        }
+    };
     let user = profile::to_user(&discord_user);
     if let Ok(Some(mut current)) = store::load() {
         current.user = Some(user.clone());
-        store::save_stored(&current)?;
+        if let Err(e) = store::save_stored(&current) {
+            eprintln!("[session] Failed to save cached profile after migration: {e}");
+            // Non-fatal — we still have the user data.
+        } else {
+            eprintln!("[session] Cached profile saved to keychain for future cold starts");
+        }
     }
 
     // TG6: start the proactive refresh timer after successful restore.
+    eprintln!("[session] Session restore complete, starting refresh timer");
     start_refresh_timer(app);
 
     Ok(Some(user))
