@@ -98,25 +98,30 @@ pub fn run() {
 /// Process a deep-link URL: validate scheme + host, extract code + state,
 /// and dispatch to the session handler.
 async fn process_deep_link_url(app: AppHandle, url: url::Url) {
-    // Defensive filter: only handle `baatcheet://callback?code=...&state=...`.
-    // The plugin is registered for scheme "baatcheet" only, but
-    // we still sanity-check scheme + host/path.
+    // Accept one exact callback shape; broad URL matching must not consume a
+    // pending OAuth flow.
     if url.scheme() != "baatcheet" {
         return;
     }
-    let host = url.host_str();
-    let path = url.path();
-    if host != Some("callback") && path != "/callback" {
+    if url.host_str() != Some("callback")
+        || !(url.path().is_empty() || url.path() == "/")
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
         return;
     }
-
-    let q: std::collections::HashMap<_, _> = url.query_pairs().collect();
-    let Some(code) = q.get("code") else {
+    let mut codes = url.query_pairs().filter(|(key, _)| key == "code");
+    let mut states = url.query_pairs().filter(|(key, _)| key == "state");
+    let Some((_, code)) = codes.next() else {
         return;
     };
-    let Some(state) = q.get("state") else {
+    let Some((_, state)) = states.next() else {
         return;
     };
+    if codes.next().is_some() || states.next().is_some() || code.is_empty() || state.is_empty()
+        || code.len() > 4096 || state.len() > 256 { return; }
 
     let code = code.to_string();
     let state = state.to_string();
@@ -129,14 +134,13 @@ async fn process_deep_link_url(app: AppHandle, url: url::Url) {
 /// and `VITE_DISCORD_CLIENT_ID`) since Tauri doesn't load repo-root .env into
 /// the Rust process — see Decision D-impl-2.
 #[tauri::command]
-async fn start_discord_login(
-    client_id: String,
-    app: AppHandle,
-    state: tauri::State<'_, AuthState>,
-) -> Result<(), String> {
-    if client_id.trim().is_empty() {
-        return Err("missing Discord Client ID (set VITE_DISCORD_CLIENT_ID in .env.local)".into());
-    }
+async fn start_discord_login(app: AppHandle, state: tauri::State<'_, AuthState>) -> Result<(), String> {
+    // This is intentionally not an invoke argument: an untrusted webview may
+    // not select the OAuth client used by the native application.
+    let client_id = option_env!("BAATCHEET_DISCORD_CLIENT_ID")
+        .filter(|id| !id.trim().is_empty())
+        .ok_or("OAuth is not configured in this build. Reinstall a configured BaatCheet build.")?
+        .to_string();
 
     let verifier = pkce::generate_verifier();
     let state_token = oauth::generate_state();
@@ -147,6 +151,9 @@ async fn start_discord_login(
             .pending
             .lock()
             .map_err(|_| "pending login lock poisoned".to_string())?;
+        if pending.is_some() {
+            return Err("A sign-in request is already waiting for Discord. Complete it or restart BaatCheet.".into());
+        }
         *pending = Some(PendingLogin {
             client_id: client_id.clone(),
             verifier,

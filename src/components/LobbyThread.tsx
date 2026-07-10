@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Hash, PhoneCall, PhoneOff } from "lucide-react";
+import { Hash } from "lucide-react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
@@ -15,9 +15,6 @@ interface LobbyThreadProps {
   conversationId: Id<"conversations">;
   myUserId: Id<"users">;
   onlineCount: number;
-  voiceStatus: "disconnected" | "connecting" | "connected";
-  onJoinVoice: () => void;
-  onLeaveVoice: () => void;
 }
 
 /** The shared lobby text thread with Discord-style rows and icon voice controls. */
@@ -25,9 +22,6 @@ export function LobbyThread({
   conversationId,
   myUserId,
   onlineCount,
-  voiceStatus,
-  onJoinVoice,
-  onLeaveVoice,
 }: LobbyThreadProps) {
   const { messages, typingPeers, send, edit, remove, toggleReaction, notifyTyping } = useChatThread(
     conversationId,
@@ -112,13 +106,6 @@ export function LobbyThread({
   };
 
   const typingText = formatGroupTyping(typingPeers);
-  const voiceLabel =
-    voiceStatus === "connected"
-      ? "Leave group voice"
-      : voiceStatus === "connecting"
-        ? "Connecting to group voice"
-        : "Join group voice";
-
   return (
     <div className="flex h-full flex-1 flex-col bg-discord-bg">
       <header className="flex items-center gap-3 border-b border-discord-border bg-discord-bg px-4 py-3">
@@ -127,16 +114,6 @@ export function LobbyThread({
           <p className="truncate font-semibold text-discord-text">Lobby</p>
           <p className="truncate text-xs text-discord-muted">{onlineCount} online</p>
         </div>
-        <button
-          onClick={() => (voiceStatus === "connected" ? onLeaveVoice() : onJoinVoice())}
-          disabled={voiceStatus === "connecting"}
-          aria-label={voiceLabel}
-          title={voiceLabel}
-          data-connected={voiceStatus === "connected"}
-          className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-discord-control text-discord-muted transition-colors hover:bg-discord-control-hover hover:text-discord-text disabled:cursor-not-allowed disabled:opacity-40 data-[connected=true]:bg-discord-success data-[connected=true]:text-white data-[connected=true]:hover:bg-discord-success-hover"
-        >
-          {voiceStatus === "connected" ? <PhoneOff size={18} /> : <PhoneCall size={18} />}
-        </button>
       </header>
 
       <div className="flex-1 overflow-y-auto py-3">

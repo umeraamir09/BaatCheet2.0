@@ -14,8 +14,8 @@ import { LobbyThread } from "./LobbyThread";
 import { IconRail } from "./IconRail";
 import { IncomingCallToast } from "./call/IncomingCallToast";
 import { CallControls } from "./call/CallControls";
-import { VoiceStage } from "./voice/VoiceStage";
 import { SettingsModal } from "./settings/SettingsModal";
+import { MemberPanel } from "./MemberPanel";
 import { checkAndInstallUpdate, type UpdateStatus } from "../lib/updater";
 import type { User } from "../auth";
 
@@ -107,14 +107,8 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
   // Click-passed peer profile — instant header while myDMs catches up to a
   // freshly created conversation (~1s). Superseded once myDMs resolves it.
   const [pendingPeerProfile, setPendingPeerProfile] = useState<PeerProfile | null>(null);
+  const [, setCollapsed] = useState(false);
 
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
-    } catch {
-      return false;
-    }
-  });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [keybindCaptureActive, setKeybindCaptureActive] = useState(false);
   const [callFullscreen, setCallFullscreen] = useState(false);
@@ -143,6 +137,8 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       return next;
     });
   }, []);
+  // Retained only while migrating persisted UI preferences from Phase 8.
+  void toggleCollapse;
 
   // Phase 5 — View mode persistence (Decision D10).
   const setViewModePersisted = useCallback((mode: "lobby" | "dms") => {
@@ -412,9 +408,11 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       <IconRail viewMode={viewMode} onSelect={setViewModePersisted} />
 
       <PresenceSidebar
+        viewMode={viewMode}
         presence={presence}
-        collapsed={collapsed}
-        onToggleCollapse={toggleCollapse}
+        groupVoice={groupVoice}
+        onJoinVoice={() => void joinVoice()}
+        onLeaveVoice={leaveVoice}
         user={user}
         onLogout={handleLogout}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -423,34 +421,17 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
         onSelectPeer={selectPeer}
         onSelectDM={selectDM}
       />
-      <main className="flex flex-1 flex-col">
+      <main className="flex min-w-0 flex-1 flex-col">
         {viewMode === "lobby" ? (
           lobbyDoc && presence.userId ? (
             // Phase 6 — Side-by-side layout when group voice is active (Decision D6).
-            // VoiceStage (left, fixed width) + LobbyThread (right, flex-1).
-            // When not in voice, full-width LobbyThread (Phase 5 behavior).
-            groupVoice.connected || groupVoice.connecting ? (
-              <div className="flex h-full flex-1">
-                <VoiceStage groupVoice={groupVoice} />
-                <LobbyThread
-                  conversationId={lobbyDoc._id}
-                  myUserId={presence.userId}
-                  onlineCount={onlineCount}
-                  voiceStatus={groupVoice.status}
-                  onJoinVoice={joinVoice}
-                  onLeaveVoice={leaveVoice}
-                />
-              </div>
-            ) : (
-              <LobbyThread
-                conversationId={lobbyDoc._id}
-                myUserId={presence.userId}
-                onlineCount={onlineCount}
-                voiceStatus={groupVoice.status}
-                onJoinVoice={joinVoice}
-                onLeaveVoice={leaveVoice}
-              />
-            )
+            // The Hangout roster lives beneath the sidebar channel, including
+            // for users who have not joined. Keep chat full-width here.
+            <LobbyThread
+              conversationId={lobbyDoc._id}
+              myUserId={presence.userId}
+              onlineCount={onlineCount}
+            />
           ) : (
             <LobbyLoadingState />
           )
@@ -492,6 +473,7 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
           <EmptyDMState />
         )}
       </main>
+      {viewMode === "lobby" && <MemberPanel currentUserId={presence.userId} onSelectPeer={selectPeer} />}
 
       {/* Phase 4 — Incoming call toast (Decision D6, D12). Persists across view modes. */}
       {/* Phase 6 — onAccept wrapped to leave group voice first (Decision D9). */}

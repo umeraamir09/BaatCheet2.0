@@ -1,5 +1,16 @@
 import { useQuery } from "convex/react";
-import { ChevronLeft, ChevronRight, LogOut, Settings } from "lucide-react";
+import type { ReactNode } from "react";
+import {
+  HeadphoneOff,
+  Headphones,
+  LogOut,
+  Mic,
+  MicOff,
+  PhoneOff,
+  Settings,
+  Signal,
+  Volume2,
+} from "lucide-react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
@@ -7,6 +18,7 @@ import type { UsePresenceResult } from "../hooks/usePresence";
 import type { User } from "../auth";
 import type { PeerProfile } from "./DMThread";
 import { IconButton } from "./ui/IconButton";
+import type { UseGroupVoiceResult } from "../hooks/useGroupVoice";
 
 const MAX_STATUS_LEN = 128;
 
@@ -17,9 +29,11 @@ type PresenceEntry = NonNullable<FunctionReturnType<typeof api.presence.listPres
 type DMEntry = NonNullable<FunctionReturnType<typeof api.conversations.listMyDMs>>[number];
 
 interface PresenceSidebarProps {
+  viewMode: "lobby" | "dms";
   presence: UsePresenceResult;
-  collapsed: boolean;
-  onToggleCollapse: () => void;
+  groupVoice: UseGroupVoiceResult;
+  onJoinVoice: () => void;
+  onLeaveVoice: () => void;
   user: User;
   onLogout: () => Promise<void> | void;
   onOpenSettings: () => void;
@@ -52,9 +66,11 @@ interface PresenceSidebarProps {
  * that used to live in the main pane (the main pane is now the DM thread).
  */
 export function PresenceSidebar({
+  viewMode,
   presence,
-  collapsed,
-  onToggleCollapse,
+  groupVoice,
+  onJoinVoice,
+  onLeaveVoice,
   user,
   onLogout,
   onOpenSettings,
@@ -64,6 +80,7 @@ export function PresenceSidebar({
   onSelectDM,
 }: PresenceSidebarProps) {
   const presenceList = useQuery(api.presence.listPresence, {}) ?? [];
+  const voiceMembers = useQuery(api.voicePresence.list, viewMode === "lobby" ? {} : "skip") ?? [];
   const myDMs =
     useQuery(api.conversations.listMyDMs, presence.userId ? { userId: presence.userId } : "skip") ??
     [];
@@ -71,63 +88,47 @@ export function PresenceSidebar({
   // Self is excluded from the friends list (you don't DM yourself).
   const friends = presenceList.filter((p) => p.discordId !== user.id);
 
-  if (collapsed) {
-    return (
-      <aside className="flex h-full w-12 flex-col items-center gap-3 border-r border-white/10 bg-discord-surface py-3">
-        <button
-          onClick={onToggleCollapse}
-          aria-label="Expand sidebar"
-          title="Expand sidebar"
-          className="text-discord-muted hover:text-discord-text"
-        >
-          <ChevronRight size={18} />
-        </button>
-        <div className="flex flex-1 flex-col gap-2 overflow-y-auto">
-          {friends.map((p) => (
-            <button
-              key={p._id}
-              onClick={() => onSelectPeer(p.userId, p.user)}
-              title={p.user?.displayName ?? p.user?.username ?? ""}
-              className="relative rounded"
-            >
-              <img src={p.user?.avatarUrl} alt="" className="h-8 w-8 rounded-full" />
-              <span
-                className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-discord-surface ${
-                  p.online ? "bg-green-500" : "bg-white/30"
-                }`}
-              />
-            </button>
-          ))}
-        </div>
-      </aside>
-    );
-  }
-
   return (
-    <aside className="flex h-full w-64 flex-col border-r border-discord-border bg-discord-sidebar">
-      <div className="flex items-center justify-between border-b border-discord-border px-3 py-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-discord-muted">
-          BaatCheet
-        </h2>
-        <button
-          onClick={onToggleCollapse}
-          aria-label="Collapse sidebar"
-          title="Collapse sidebar"
-          className="text-discord-muted hover:text-discord-text"
-        >
-          <ChevronLeft size={18} />
-        </button>
+    <aside className="flex h-full w-60 shrink-0 flex-col border-r border-discord-border bg-discord-sidebar">
+      <div className="border-b border-discord-border px-4 py-3">
+        <h2 className="text-sm font-semibold text-discord-text">{viewMode === "lobby" ? "Hangout Lobby" : "Direct Messages"}</h2>
+        <p className="mt-0.5 text-xs text-discord-muted">{viewMode === "lobby" ? "Shared space" : "Friends and conversations"}</p>
       </div>
 
-      <StatusInput
+      {viewMode === "lobby" && <div className="border-b border-discord-border px-2 py-3">
+        <p className="px-2 pb-2 text-[11px] font-semibold uppercase tracking-wide text-discord-muted">Voice</p>
+        <button onClick={() => (groupVoice.connected ? onLeaveVoice() : onJoinVoice())}
+          disabled={groupVoice.connecting} aria-label={groupVoice.connected ? "Leave Hangout" : "Join Hangout"}
+          className="flex w-full items-center gap-2 rounded px-2 py-2 text-left text-sm text-discord-muted transition hover:bg-discord-control hover:text-discord-text disabled:opacity-60">
+          {groupVoice.connected ? <Volume2 size={18} className="text-discord-success" /> : <Headphones size={18} />}
+          <span className="min-w-0 flex-1 truncate">Hangout</span>
+          <span className="text-[11px] text-discord-subtle">{groupVoice.connecting ? "Joining…" : groupVoice.connected ? "Connected" : "Join"}</span>
+        </button>
+        {voiceMembers.length > 0 && (
+          <div className="mt-1 space-y-0.5 px-1" aria-label={`${voiceMembers.length} users in Hangout`}>
+            {voiceMembers.map((member) => {
+              const local = member.userId === presence.userId;
+              const connectedParticipant = groupVoice.participants.find((participant) => participant.identity === member.userId);
+              const name = member.user?.displayName ?? member.user?.username ?? "Unknown";
+              return <div key={member._id} className="flex min-h-8 items-center gap-2 rounded px-2 py-1 text-sm text-discord-muted hover:bg-discord-control">
+                {member.user?.avatarUrl ? <img src={member.user.avatarUrl} alt="" className={`h-5 w-5 rounded-full ${connectedParticipant?.isSpeaking ? "ring-2 ring-discord-success" : ""}`} /> : <span className="flex h-5 w-5 items-center justify-center rounded-full bg-discord-control text-[10px] text-discord-text">{name.charAt(0).toUpperCase()}</span>}
+                <span className="min-w-0 flex-1 truncate">{name}{local ? " (you)" : ""}</span>
+                {connectedParticipant && !connectedParticipant.isMicEnabled && <MicOff size={14} aria-label="Muted" className="text-discord-muted" />}
+              </div>;
+            })}
+          </div>
+        )}
+      </div>}
+
+      {viewMode === "dms" && <StatusInput
         value={presence.myStatus}
         onChange={presence.setStatus}
         disabled={!presence.userId}
-      />
+      />}
 
       <div className="flex-1 overflow-y-auto">
         {/* Direct Messages (Phase 3 — smoke 4 reorderable list) */}
-        {myDMs.length > 0 && (
+        {viewMode === "dms" && myDMs.length > 0 && (
           <div className="border-b border-white/8 px-1 py-1">
             <p className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-white/45">
               Direct Messages
@@ -150,7 +151,7 @@ export function PresenceSidebar({
         )}
 
         {/* All friends (Phase 2 list, preserved — now DM-launchable) */}
-        <div className="px-1 py-1">
+        {viewMode === "dms" && <div className="px-1 py-1">
           <p className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-white/45">
             Friends
           </p>
@@ -165,8 +166,16 @@ export function PresenceSidebar({
               onSelect={() => onSelectPeer(p.userId, p.user)}
             />
           ))}
-        </div>
+        </div>}
       </div>
+
+      {viewMode === "lobby" && groupVoice.connected && (
+        <VoiceControlPanel
+          groupVoice={groupVoice}
+          onLeave={onLeaveVoice}
+          onOpenSettings={onOpenSettings}
+        />
+      )}
 
       {/* Self + log out footer (replaces the Phase-1 main-pane logout button) */}
       <footer className="flex items-center gap-2 border-t border-discord-border bg-discord-surface px-2 py-2">
@@ -190,6 +199,62 @@ export function PresenceSidebar({
       </footer>
     </aside>
   );
+}
+
+/** Connected-state control tray. Every action maps to a real BaatCheet feature. */
+function VoiceControlPanel({
+  groupVoice,
+  onLeave,
+  onOpenSettings,
+}: {
+  groupVoice: UseGroupVoiceResult;
+  onLeave: () => void;
+  onOpenSettings: () => void;
+}) {
+  const { muted, deafened, participants, setMuted, setDeafened } = groupVoice;
+  return (
+    <section className="mx-2 mb-2 rounded-xl border border-discord-border bg-discord-elevated p-3 shadow-sm" aria-label="Voice controls">
+      <div className="flex items-start gap-2">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-discord-success/15 text-discord-success">
+          <Signal size={20} aria-hidden="true" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-discord-success">Voice Connected</p>
+          <p className="truncate text-xs text-discord-muted">Hangout · {participants.length} connected</p>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-4 gap-2">
+        <VoiceControlButton label={muted ? "Unmute" : "Mute"} active={muted} onClick={() => setMuted(!muted)}>
+          {muted ? <MicOff size={18} /> : <Mic size={18} />}
+        </VoiceControlButton>
+        <VoiceControlButton label={deafened ? "Undeafen" : "Deafen"} active={deafened} onClick={() => setDeafened(!deafened)}>
+          {deafened ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
+        </VoiceControlButton>
+        <VoiceControlButton label="Voice settings" onClick={onOpenSettings}>
+          <Settings size={18} />
+        </VoiceControlButton>
+        <VoiceControlButton label="Disconnect" danger onClick={onLeave}>
+          <PhoneOff size={18} />
+        </VoiceControlButton>
+      </div>
+    </section>
+  );
+}
+
+function VoiceControlButton({
+  label,
+  active = false,
+  danger = false,
+  onClick,
+  children,
+}: {
+  label: string;
+  active?: boolean;
+  danger?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return <button type="button" aria-label={label} title={label} onClick={onClick} className={`flex h-10 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-discord-focus ${danger ? "bg-discord-danger/15 text-discord-danger hover:bg-discord-danger hover:text-white" : active ? "bg-discord-danger text-white hover:bg-discord-danger-hover" : "bg-discord-control text-discord-muted hover:bg-discord-control-hover hover:text-discord-text"}`}>{children}</button>;
 }
 
 /** A DM row: avatar, name, last-message preview. Reorderable by lastMessageAt. */

@@ -1,6 +1,6 @@
 [package]
 name = "baatcheet"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -16,6 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+dotenvy = "0.15"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -34,7 +35,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "nat
 keyring = "3"
 dirs = "6"
 tokio = { version = "1", features = ["sync", "rt-multi-thread", "time"] }
+subtle = "2"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-global-shortcut = "2"
-

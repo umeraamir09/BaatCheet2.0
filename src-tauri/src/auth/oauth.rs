@@ -20,7 +20,9 @@ pub const SCOPE: &str = "identify";
 /// without proper User-Agent and Accept headers.
 pub fn http_client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("BaatCheet/0.1.0 (Discord OAuth2 PKCE)")
+        .user_agent("BaatCheet/0.2.0 (Discord OAuth2 PKCE)")
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(15))
         .default_headers({
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
@@ -97,8 +99,7 @@ pub async fn exchange_code(
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("token exchange failed ({status}): {body}"));
+        return Err(format!("token exchange failed ({status})"));
     }
 
     let body = resp
@@ -106,8 +107,7 @@ pub async fn exchange_code(
         .await
         .map_err(|e| format!("failed to read response body: {e}"))?;
 
-    serde_json::from_str::<TokenSet>(&body)
-        .map_err(|e| format!("failed to parse token response: {e}\nRaw body: {body}"))
+    validate_token_set(serde_json::from_str::<TokenSet>(&body).map_err(|_| "invalid token response")?)
 }
 
 /// Refresh an expired access token using a refresh token (TG6).
@@ -138,8 +138,7 @@ pub async fn refresh_tokens(
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("refresh failed ({status}): {body}"));
+        return Err(format!("refresh failed ({status})"));
     }
 
     let body = resp
@@ -147,8 +146,19 @@ pub async fn refresh_tokens(
         .await
         .map_err(|e| format!("failed to read response body: {e}"))?;
 
-    serde_json::from_str::<TokenSet>(&body)
-        .map_err(|e| format!("failed to parse refresh response: {e}\nRaw body: {body}"))
+    validate_token_set(serde_json::from_str::<TokenSet>(&body).map_err(|_| "invalid refresh response")?)
+}
+
+fn validate_token_set(tokens: TokenSet) -> Result<TokenSet, String> {
+    if tokens.access_token.is_empty()
+        || tokens.refresh_token.is_empty()
+        || tokens.expires_in == 0
+        || !tokens.token_type.eq_ignore_ascii_case("bearer")
+        || !tokens.scope.split_whitespace().any(|scope| scope == SCOPE)
+    {
+        return Err("Discord returned an invalid token response".into());
+    }
+    Ok(tokens)
 }
 
 #[cfg(test)]

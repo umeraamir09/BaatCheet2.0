@@ -1,4 +1,4 @@
-import { Hash, MessageCircle } from "lucide-react";
+import { Hash } from "lucide-react";
 
 interface IconRailProps {
   viewMode: "lobby" | "dms";
@@ -9,18 +9,18 @@ export function IconRail({ viewMode, onSelect }: IconRailProps) {
   return (
     <nav className="flex h-full w-14 flex-col items-center gap-2 border-r border-discord-border bg-discord-elevated py-3">
       <RailButton
-        active={viewMode === "lobby"}
-        onClick={() => onSelect("lobby")}
-        title="Group Lobby"
-      >
-        <Hash size={20} />
-      </RailButton>
-      <RailButton
         active={viewMode === "dms"}
         onClick={() => onSelect("dms")}
         title="Direct Messages"
       >
-        <MessageCircle size={20} />
+        <img src="/icons.png" alt="" className="h-7 w-7 rounded-lg" draggable={false} />
+      </RailButton>
+      <RailButton
+        active={viewMode === "lobby"}
+        onClick={() => onSelect("lobby")}
+        title="Hangout Lobby"
+      >
+        <Hash size={20} />
       </RailButton>
     </nav>
   );

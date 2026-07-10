@@ -2,6 +2,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
+use subtle::ConstantTimeEq;
 
 use crate::auth::{oauth, profile, store};
 
@@ -52,18 +53,20 @@ pub async fn handle_callback(app: AppHandle, code: String, state: String) {
                 return;
             }
         };
-        guard.take()
+        match guard.as_ref() {
+            Some(pending) if pending.state.as_bytes().ct_eq(state.as_bytes()).into() => guard.take(),
+            Some(_) => {
+                let _ = app.emit("discord:login-rejected", "The sign-in link did not match this request. Please try again.");
+                return;
+            }
+            None => None,
+        }
     };
 
     let Some(pending) = pending else {
         let _ = app.emit("discord:login-rejected", "no pending login");
         return;
     };
-
-    if pending.state != state {
-        let _ = app.emit("discord:login-rejected", "state mismatch");
-        return;
-    }
 
     // TG4 pipeline: exchange code → fetch profile → save tokens → emit success.
     let client = match oauth::http_client() {
@@ -428,6 +431,8 @@ pub fn dev_set_expires_in(seconds: u64) -> Result<(), String> {
 
     // Create a new StoredTokens with the modified expiry, preserving client_id.
     let modified = store::StoredTokens {
+        schema_version: stored.schema_version,
+        generation: stored.generation.saturating_add(1),
         access_token: stored.access_token,
         refresh_token: stored.refresh_token,
         expires_at: new_expires_at,
@@ -455,6 +460,8 @@ pub fn dev_corrupt_refresh() -> Result<(), String> {
 
     // Create a new StoredTokens with a corrupted refresh token, preserving client_id.
     let corrupted = store::StoredTokens {
+        schema_version: stored.schema_version,
+        generation: stored.generation.saturating_add(1),
         access_token: stored.access_token,
         refresh_token: "corrupted-refresh-token-for-testing".to_string(),
         expires_at: stored.expires_at,
