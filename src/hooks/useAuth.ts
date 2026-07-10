@@ -12,6 +12,7 @@ export function useAuth() {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [user, setUser] = useState<User | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
   const upsertUser = useMutation(api.users.upsertUser);
 
   // TG5: restore session on cold start.
@@ -43,7 +44,13 @@ export function useAuth() {
         setError(`Could not restore the saved session: ${String(e)}`);
         setStatus("failed");
       });
-  }, [upsertUser]);
+  }, [restoreAttempt, upsertUser]);
+
+  function retrySession() {
+    setError(null);
+    setStatus("loading");
+    setRestoreAttempt((attempt) => attempt + 1);
+  }
 
   async function login() {
     setError(null);
@@ -115,5 +122,5 @@ export function useAuth() {
     };
   }, [upsertUser]);
 
-  return { status, user, error, login, logout };
+  return { status, user, error, login, logout, retrySession };
 }

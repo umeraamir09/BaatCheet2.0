@@ -1,4 +1,12 @@
-import { Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, MoreHorizontal } from "lucide-react";
+import {
+  Headphones,
+  HeadphoneOff,
+  Maximize2,
+  Mic,
+  MicOff,
+  Minimize2,
+  PhoneOff,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { CallStatus } from "../../hooks/useCall";
 import { IconButton } from "../ui/IconButton";
@@ -15,10 +23,15 @@ interface CallControlsProps {
   peerProfile: Profile | null;
   muted: boolean;
   deafened: boolean;
+  peerMuted: boolean;
+  peerDeafened: boolean;
+  localSpeaking: boolean;
+  remoteSpeaking: boolean;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
   onMute: (muted: boolean) => void;
   onDeafen: (deafened: boolean) => void;
   onLeave: () => void;
-  audioRef: React.MutableRefObject<HTMLAudioElement | null>;
 }
 
 export function CallControls({
@@ -27,114 +40,136 @@ export function CallControls({
   peerProfile,
   muted,
   deafened,
+  peerMuted,
+  peerDeafened,
+  localSpeaking,
+  remoteSpeaking,
+  fullscreen,
+  onToggleFullscreen,
   onMute,
   onDeafen,
   onLeave,
-  audioRef,
 }: CallControlsProps) {
   const [elapsed, setElapsed] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const prevStatusRef = useRef<CallStatus>(status);
+  const peerName = peerProfile?.displayName ?? peerProfile?.username ?? "Unknown";
 
   useEffect(() => {
-    if (prevStatusRef.current === "connected" && status !== "connected") {
-      setElapsed(0);
-    }
-    prevStatusRef.current = status;
-
-    if (status === "connected") {
-      intervalRef.current = setInterval(() => {
-        setElapsed((prev) => prev + 1);
-      }, 1000);
-    } else if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-
+    if (status !== "connected") return;
+    intervalRef.current = setInterval(() => setElapsed((value) => value + 1), 1000);
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = null;
     };
   }, [status]);
 
-  const peerName = peerProfile?.displayName ?? peerProfile?.username ?? "Unknown";
-  const statusText = status === "connected" ? formatTime(elapsed) : "Connecting...";
+  const content = (
+    <>
+      <div className={`flex items-center justify-center ${fullscreen ? "flex-1 gap-10" : "gap-4"}`}>
+        <Participant
+          profile={peerProfile}
+          label={peerName}
+          speaking={remoteSpeaking}
+          muted={peerMuted}
+          deafened={peerDeafened}
+          large={fullscreen}
+        />
+        <Participant
+          profile={localProfile}
+          label={localProfile.displayName ?? localProfile.username}
+          speaking={localSpeaking}
+          muted={muted}
+          deafened={deafened}
+          large={fullscreen}
+        />
+      </div>
+      <div className={fullscreen ? "text-center" : "min-w-0 flex-1"}>
+        <p className="truncate font-semibold text-discord-text">{peerName}</p>
+        <p className="text-sm text-discord-muted">
+          {status === "connected" ? formatTime(elapsed) : "Connecting…"}
+        </p>
+      </div>
+      <div className="flex items-center justify-center gap-2">
+        <IconButton
+          label={muted ? "Unmute" : "Mute"}
+          variant={muted ? "danger" : "default"}
+          onClick={() => onMute(!muted)}
+        >
+          {muted ? <MicOff size={18} /> : <Mic size={18} />}
+        </IconButton>
+        <IconButton
+          label={deafened ? "Undeafen" : "Deafen"}
+          variant={deafened ? "danger" : "default"}
+          onClick={() => onDeafen(!deafened)}
+        >
+          {deafened ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
+        </IconButton>
+        <IconButton
+          label={fullscreen ? "Exit full screen" : "Full screen"}
+          variant="default"
+          onClick={onToggleFullscreen}
+        >
+          {fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+        </IconButton>
+        <IconButton label="Leave call" variant="danger" onClick={onLeave}>
+          <PhoneOff size={18} />
+        </IconButton>
+      </div>
+    </>
+  );
 
+  if (fullscreen) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col bg-black/95 p-8 text-discord-text">
+        {content}
+      </div>
+    );
+  }
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-black/95 text-discord-text">
-      <div className="flex flex-1 flex-col items-center justify-center gap-8">
-        <div className="flex items-center justify-center">
-          <Avatar profile={peerProfile} label={peerName} large dimmed={status !== "connected"} />
-          <Avatar
-            profile={localProfile}
-            label={localProfile.displayName ?? localProfile.username}
-            large
-          />
-        </div>
-        <div className="text-center">
-          <p className="text-xl font-semibold">{peerName}</p>
-          <p className="mt-1 text-sm text-discord-muted">{statusText}</p>
-        </div>
-      </div>
-
-      <div className="flex justify-center pb-8">
-        <div className="flex items-center gap-3 rounded-2xl border border-discord-border bg-discord-elevated/95 px-4 py-3 shadow-2xl">
-          <IconButton
-            label={muted ? "Unmute" : "Mute"}
-            variant={muted ? "danger" : "default"}
-            onClick={() => onMute(!muted)}
-          >
-            {muted ? <MicOff size={20} /> : <Mic size={20} />}
-          </IconButton>
-          <IconButton
-            label={deafened ? "Undeafen" : "Deafen"}
-            variant={deafened ? "danger" : "default"}
-            onClick={() => onDeafen(!deafened)}
-          >
-            {deafened ? <HeadphoneOff size={20} /> : <Headphones size={20} />}
-          </IconButton>
-          <IconButton label="More call options" variant="default">
-            <MoreHorizontal size={20} />
-          </IconButton>
-          <IconButton label="Leave call" variant="danger" size="lg" onClick={onLeave}>
-            <PhoneOff size={22} />
-          </IconButton>
-        </div>
-      </div>
-
-      <audio ref={audioRef} autoPlay className="hidden" />
-    </div>
+    <section className="flex items-center gap-4 border-b border-discord-border bg-discord-surface px-4 py-3">
+      {content}
+    </section>
   );
 }
 
-function Avatar({
+function Participant({
   profile,
   label,
-  large = false,
-  dimmed = false,
+  speaking,
+  muted,
+  deafened,
+  large,
 }: {
   profile: Profile | null;
   label: string;
-  large?: boolean;
-  dimmed?: boolean;
+  speaking: boolean;
+  muted: boolean;
+  deafened: boolean;
+  large: boolean;
 }) {
-  const size = large ? "h-24 w-24" : "h-10 w-10";
+  const size = large ? "h-28 w-28" : "h-12 w-12";
   return (
-    <div
-      className={`-ml-3 first:ml-0 rounded-full border-4 border-black bg-discord-surface p-1 ${
-        dimmed ? "opacity-60 grayscale" : ""
-      }`}
-    >
-      {profile?.avatarUrl ? (
-        <img src={profile.avatarUrl} alt={`${label} avatar`} className={`${size} rounded-full`} />
-      ) : (
-        <div
-          className={`${size} flex items-center justify-center rounded-full bg-discord-blurple text-2xl font-semibold text-white`}
+    <div className="relative shrink-0">
+      <div
+        className={`rounded-full border-4 bg-discord-surface p-1 transition-colors ${speaking ? "border-discord-success" : "border-discord-border"}`}
+      >
+        {profile?.avatarUrl ? (
+          <img src={profile.avatarUrl} alt={`${label} avatar`} className={`${size} rounded-full`} />
+        ) : (
+          <div
+            className={`${size} flex items-center justify-center rounded-full bg-discord-blurple text-lg font-semibold text-white`}
+          >
+            {label.charAt(0).toUpperCase()}
+          </div>
+        )}
+      </div>
+      {(muted || deafened) && (
+        <span
+          className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-discord-danger text-white"
+          title={deafened ? "Deafened" : "Muted"}
         >
-          {label.charAt(0).toUpperCase()}
-        </div>
+          {deafened ? <HeadphoneOff size={13} /> : <MicOff size={13} />}
+        </span>
       )}
     </div>
   );

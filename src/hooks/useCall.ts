@@ -35,6 +35,10 @@ export interface UseCallResult {
   peerProfile: { displayName: string | null; username: string; avatarUrl: string } | null;
   muted: boolean;
   deafened: boolean;
+  peerMuted: boolean;
+  peerDeafened: boolean;
+  localSpeaking: boolean;
+  remoteSpeaking: boolean;
   startCall: (
     peerUserId: Id<"users">,
     peerProfile: { displayName: string | null; username: string; avatarUrl: string },
@@ -66,6 +70,10 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
   } | null>(null);
   const [muted, setMutedState] = useState(false);
   const [deafened, setDeafenedState] = useState(false);
+  const [peerMuted, setPeerMuted] = useState(false);
+  const [peerDeafened, setPeerDeafened] = useState(false);
+  const [localSpeaking, setLocalSpeaking] = useState(false);
+  const [remoteSpeaking, setRemoteSpeaking] = useState(false);
 
   const peerCallRef = useRef<PeerCall | null>(null);
   const cleanedRef = useRef(false);
@@ -76,6 +84,7 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
   const pendingCandidatesRef = useRef<{ side: string; json: string }[]>([]);
   const answerAppliedRef = useRef(false);
   const statusRef = useRef<CallStatus>("idle");
+  const stopSpeakingRefs = useRef<(() => void)[]>([]);
 
   // Keep statusRef in sync with status state
   useEffect(() => {
@@ -90,6 +99,7 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
   const endCallMutation = useMutation(api.calls.endCall);
   const markMissedMutation = useMutation(api.calls.markMissed);
   const addIceCandidateMutation = useMutation(api.calls.addIceCandidate);
+  const updateMediaStateMutation = useMutation(api.calls.updateMediaState);
 
   // Reactive queries.
   const callDoc = useQuery(api.calls.getCall, callId ? { callId } : "skip");
@@ -154,6 +164,12 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
     pendingCandidatesRef.current = [];
     answerAppliedRef.current = false;
     callIdRef.current = null;
+    stopSpeakingRefs.current.forEach((stop) => stop());
+    stopSpeakingRefs.current = [];
+    setLocalSpeaking(false);
+    setRemoteSpeaking(false);
+    setPeerMuted(false);
+    setPeerDeafened(false);
   }, []);
 
   // Leave / end the call.
@@ -210,6 +226,11 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
 
     const pc = peerCallRef.current;
     const isCaller = callDoc.callerId === myUserId;
+
+    setPeerMuted(isCaller ? (callDoc.calleeMuted ?? false) : (callDoc.callerMuted ?? false));
+    setPeerDeafened(
+      isCaller ? (callDoc.calleeDeafened ?? false) : (callDoc.callerDeafened ?? false),
+    );
 
     console.log(`${LOG_PREFIX} callDoc effect: status=${callDoc.status}, isCaller=${isCaller}`);
 
@@ -311,6 +332,7 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
               .play()
               .catch((e) => console.error(`${LOG_PREFIX} audio play failed:`, e));
           }
+          stopSpeakingRefs.current.push(watchSpeaking(stream, setRemoteSpeaking));
         },
         onConnectionStateChange: (state) => {
           console.log(`${LOG_PREFIX} Caller connection state:`, state);
@@ -326,6 +348,9 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
       });
 
       peerCallRef.current = pc;
+      if (pc.getLocalStream()) {
+        stopSpeakingRefs.current.push(watchSpeaking(pc.getLocalStream()!, setLocalSpeaking));
+      }
       console.log(`${LOG_PREFIX} PeerCall created, creating offer...`);
       const offerSdp = await pc.startCaller();
       console.log(`${LOG_PREFIX} Offer created, calling startCall mutation...`);
@@ -395,6 +420,7 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
               .play()
               .catch((e) => console.error(`${LOG_PREFIX} audio play failed:`, e));
           }
+          stopSpeakingRefs.current.push(watchSpeaking(stream, setRemoteSpeaking));
         },
         onConnectionStateChange: (state) => {
           console.log(`${LOG_PREFIX} Callee connection state:`, state);
@@ -409,6 +435,9 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
       });
 
       peerCallRef.current = pc;
+      if (pc.getLocalStream()) {
+        stopSpeakingRefs.current.push(watchSpeaking(pc.getLocalStream()!, setLocalSpeaking));
+      }
       console.log(`${LOG_PREFIX} PeerCall created, creating answer...`);
       const answerSdp = await pc.startCallee(incomingCallDoc.offerSdp);
       console.log(`${LOG_PREFIX} Answer created, calling answerCall mutation...`);
@@ -442,6 +471,14 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
   const setMuted = (muted: boolean) => {
     setMutedState(muted);
     peerCallRef.current?.setMuted(muted);
+    if (callIdRef.current && myUserId) {
+      updateMediaStateMutation({
+        callId: callIdRef.current,
+        userId: myUserId,
+        muted,
+        deafened,
+      }).catch((e) => console.error(`${LOG_PREFIX} update media state failed:`, e));
+    }
   };
 
   const setDeafened = (deafened: boolean) => {
@@ -449,6 +486,16 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
     peerCallRef.current?.setDeafened(deafened);
     if (audioRef.current) {
       audioRef.current.muted = deafened;
+    }
+    const nextMuted = deafened ? true : false;
+    setMutedState(nextMuted);
+    if (callIdRef.current && myUserId) {
+      updateMediaStateMutation({
+        callId: callIdRef.current,
+        userId: myUserId,
+        muted: nextMuted,
+        deafened,
+      }).catch((e) => console.error(`${LOG_PREFIX} update media state failed:`, e));
     }
   };
 
@@ -497,6 +544,10 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
     peerProfile,
     muted,
     deafened,
+    peerMuted,
+    peerDeafened,
+    localSpeaking,
+    remoteSpeaking,
     startCall,
     accept,
     reject,
@@ -505,5 +556,47 @@ export function useCall(myUserId: Id<"users"> | null): UseCallResult {
     setDeafened,
     audioRef,
     incomingCall: incomingCallDoc && status === "idle" ? incomingCallDoc : null,
+  };
+}
+
+/** Lightweight local-only audio activity monitor for speaking rings. */
+function watchSpeaking(stream: MediaStream, setSpeaking: (speaking: boolean) => void): () => void {
+  const AudioContextCtor =
+    window.AudioContext ||
+    (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextCtor) return () => {};
+
+  const context = new AudioContextCtor();
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 512;
+  const source = context.createMediaStreamSource(stream);
+  source.connect(analyser);
+  const samples = new Uint8Array(analyser.fftSize);
+  let frame = 0;
+  let stopped = false;
+  let wasSpeaking = false;
+  let lastSpeechAt = 0;
+
+  const tick = () => {
+    if (stopped) return;
+    analyser.getByteTimeDomainData(samples);
+    let sum = 0;
+    for (const sample of samples) sum += Math.abs(sample - 128);
+    const active = sum / samples.length > 2.5;
+    if (active) lastSpeechAt = performance.now();
+    const speaking = active || performance.now() - lastSpeechAt < 240;
+    if (speaking !== wasSpeaking) {
+      wasSpeaking = speaking;
+      setSpeaking(speaking);
+    }
+    frame = requestAnimationFrame(tick);
+  };
+  frame = requestAnimationFrame(tick);
+  return () => {
+    stopped = true;
+    cancelAnimationFrame(frame);
+    setSpeaking(false);
+    source.disconnect();
+    void context.close();
   };
 }

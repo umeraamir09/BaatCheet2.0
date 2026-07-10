@@ -48,7 +48,25 @@ interface AuthenticatedLayoutProps {
  */
 export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps) {
   const presence = usePresence(user.id);
-  const call = useCall(presence.userId);
+  const {
+    status: callStatus,
+    peerUserId: callPeerUserId,
+    peerProfile: callPeerProfile,
+    muted: callMuted,
+    deafened: callDeafened,
+    peerMuted: callPeerMuted,
+    peerDeafened: callPeerDeafened,
+    localSpeaking,
+    remoteSpeaking,
+    startCall,
+    accept: acceptCall,
+    reject: rejectCall,
+    leave: leaveCall,
+    setMuted: setCallMuted,
+    setDeafened: setCallDeafened,
+    audioRef: callAudioRef,
+    incomingCall,
+  } = useCall(presence.userId);
   const groupVoice = useGroupVoice(presence.userId);
   const keybinds = useKeybindPreferences();
   const getOrCreateDM = useMutation(api.conversations.getOrCreateDM);
@@ -99,6 +117,7 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [keybindCaptureActive, setKeybindCaptureActive] = useState(false);
+  const [callFullscreen, setCallFullscreen] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({
     state: "idle",
     message: "Ready to check the configured local/static endpoint.",
@@ -194,33 +213,33 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
   // Phase 4 — Check if a call is active with the current peer.
   const callActiveWithPeer = useMemo(() => {
     return (
-      call.status !== "idle" && call.status !== "ended" && call.peerUserId === effectivePeerUserId
+      callStatus !== "idle" && callStatus !== "ended" && callPeerUserId === effectivePeerUserId
     );
-  }, [call.status, call.peerUserId, effectivePeerUserId]);
+  }, [callStatus, callPeerUserId, effectivePeerUserId]);
 
-  const callActive = call.status !== "idle" && call.status !== "ended";
+  const callActive = callStatus !== "idle" && callStatus !== "ended";
 
   const toggleVoiceMute = useCallback(() => {
     if (callActive) {
-      call.setMuted(!call.muted);
+      setCallMuted(!callMuted);
       return;
     }
     if (groupVoice.connected) {
       groupVoice.setMuted(!groupVoice.muted);
     }
-  }, [call, callActive, groupVoice]);
+  }, [callActive, callMuted, groupVoice, setCallMuted]);
 
   const toggleVoiceDeafen = useCallback(() => {
     if (callActive) {
-      call.setDeafened(!call.deafened);
+      setCallDeafened(!callDeafened);
       return;
     }
     if (groupVoice.connected) {
       groupVoice.setDeafened(!groupVoice.deafened);
     }
-  }, [call, callActive, groupVoice]);
+  }, [callActive, callDeafened, groupVoice, setCallDeafened]);
 
-  useVoiceKeybinds({
+  const shortcutStatus = useVoiceKeybinds({
     preferences: keybinds.preferences,
     captureActive: keybindCaptureActive,
     onToggleMute: toggleVoiceMute,
@@ -235,22 +254,23 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
   // Phase 6 — Leave group voice first if connected (Decision D9 — mutual exclusivity).
   const startCallWithPeer = useCallback(
     async (peerUserId: Id<"users">, peerProfile: PeerProfile) => {
+      setCallFullscreen(false);
       if (groupVoice.connected) {
         await groupVoice.leave();
       }
-      call.startCall(peerUserId, peerProfile);
+      startCall(peerUserId, peerProfile);
     },
-    [call, groupVoice],
+    [groupVoice, startCall],
   );
 
   // Phase 6 — Group voice join/leave wrappers (Decision D9 — mutual exclusivity).
   // joinVoice: leave any active 1:1 call first, then join group voice.
   const joinVoice = useCallback(async () => {
-    if (call.status !== "idle" && call.status !== "ended") {
-      await call.leave("left");
+    if (callStatus !== "idle" && callStatus !== "ended") {
+      await leaveCall("left");
     }
     await groupVoice.join();
-  }, [call, groupVoice]);
+  }, [callStatus, groupVoice, leaveCall]);
 
   // leaveVoice: leave group voice.
   const leaveVoice = useCallback(() => {
@@ -260,11 +280,12 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
   // Phase 6 — Accept incoming 1:1 call wrapper (Decision D9).
   // Leave group voice first if connected, then accept the 1:1 call.
   const acceptCallWithVoiceLeave = useCallback(async () => {
+    setCallFullscreen(false);
     if (groupVoice.connected) {
       await groupVoice.leave();
     }
-    await call.accept();
-  }, [call, groupVoice]);
+    await acceptCall();
+  }, [acceptCall, groupVoice]);
 
   // Click a friend row → open/create the DM. Phase 5: also switches to "dms"
   // view mode (Decision D3 — cross-navigation from any view).
@@ -325,8 +346,8 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       await groupVoice.leave();
     }
     // Phase 4 — End any active 1:1 call before going offline.
-    if (call.status !== "idle" && call.status !== "ended") {
-      await call.leave("left");
+    if (callStatus !== "idle" && callStatus !== "ended") {
+      await leaveCall("left");
     }
     await presence.goOffline();
     try {
@@ -336,7 +357,7 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
       // non-fatal
     }
     await onLogout();
-  }, [groupVoice, call, presence, onLogout]);
+  }, [callStatus, groupVoice, leaveCall, presence, onLogout]);
 
   // Tauri window close-requested → end any active voice FIRST (Phase 6 group
   // voice → Phase 4 1:1 call teardown ordering — Decision D12), then fire
@@ -357,10 +378,10 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
           ]);
         }
         // Phase 4 — End any active 1:1 call before going offline.
-        if (call.status !== "idle" && call.status !== "ended") {
+        if (callStatus !== "idle" && callStatus !== "ended") {
           console.log("[AuthenticatedLayout] Ending active 1:1 call before close...");
           await Promise.race([
-            call.leave("left"),
+            leaveCall("left"),
             new Promise<void>((resolve) => setTimeout(resolve, 3000)),
           ]);
         }
@@ -383,7 +404,7 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
     return () => {
       unlistenP.then((fn) => fn()).catch(() => {});
     };
-  }, [groupVoice, call, presence]);
+  }, [callStatus, groupVoice, leaveCall, presence]);
 
   return (
     <div className="flex h-screen bg-discord-bg text-white">
@@ -442,6 +463,30 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
             peerOnline={peerOnline}
             startCallWithPeer={startCallWithPeer}
             callActiveWithPeer={callActiveWithPeer}
+            callPanel={
+              callActiveWithPeer ? (
+                <CallControls
+                  status={callStatus}
+                  localProfile={{
+                    displayName: user.displayName,
+                    username: user.username,
+                    avatarUrl: user.avatarUrl,
+                  }}
+                  peerProfile={callPeerProfile}
+                  muted={callMuted}
+                  deafened={callDeafened}
+                  peerMuted={callPeerMuted}
+                  peerDeafened={callPeerDeafened}
+                  localSpeaking={localSpeaking}
+                  remoteSpeaking={remoteSpeaking}
+                  fullscreen={callFullscreen}
+                  onToggleFullscreen={() => setCallFullscreen((value) => !value)}
+                  onMute={setCallMuted}
+                  onDeafen={setCallDeafened}
+                  onLeave={() => leaveCall("left")}
+                />
+              ) : null
+            }
           />
         ) : (
           <EmptyDMState />
@@ -450,37 +495,22 @@ export function AuthenticatedLayout({ user, onLogout }: AuthenticatedLayoutProps
 
       {/* Phase 4 — Incoming call toast (Decision D6, D12). Persists across view modes. */}
       {/* Phase 6 — onAccept wrapped to leave group voice first (Decision D9). */}
-      {call.incomingCall && (
+      {incomingCall && (
         <IncomingCallToast
-          caller={call.incomingCall.caller}
+          caller={incomingCall.caller}
           onAccept={acceptCallWithVoiceLeave}
-          onDecline={call.reject}
+          onDecline={rejectCall}
         />
       )}
 
-      {/* Phase 4 — Floating call controls (Decision D12). Persists across view modes. */}
-      {call.status !== "idle" && call.status !== "ended" && (
-        <CallControls
-          status={call.status}
-          localProfile={{
-            displayName: user.displayName,
-            username: user.username,
-            avatarUrl: user.avatarUrl,
-          }}
-          peerProfile={call.peerProfile}
-          muted={call.muted}
-          deafened={call.deafened}
-          onMute={call.setMuted}
-          onDeafen={call.setDeafened}
-          onLeave={() => call.leave("left")}
-          audioRef={call.audioRef}
-        />
-      )}
+      {/* Keep remote audio mounted while the user navigates away from the matching DM. */}
+      {callActive && <audio ref={callAudioRef} autoPlay className="hidden" />}
 
       <SettingsModal
         open={settingsOpen}
         keybinds={keybinds.preferences}
         updateStatus={updateStatus}
+        shortcutStatus={shortcutStatus}
         onClose={() => {
           setSettingsOpen(false);
           setKeybindCaptureActive(false);

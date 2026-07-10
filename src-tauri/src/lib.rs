@@ -3,12 +3,38 @@ mod auth;
 use auth::oauth;
 use auth::pkce;
 use auth::session::{AuthState, PendingLogin};
+use std::io::Write;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_opener::OpenerExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // In release builds (no console), capture panics to a file
+    // so we can diagnose startup crashes.
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("[BaatCheet PANIC] {info}\n");
+        // Also try stderr — visible in debug builds, silent in release
+        let _ = writeln!(std::io::stderr(), "{msg}");
+        // Write to a temp file for release-build forensics
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::env::temp_dir().join("baatcheet_panic.log"))
+        {
+            let _ = writeln!(f, "{msg}");
+            if let Some(location) = info.location() {
+                let _ = writeln!(f, "  at {}:{}", location.file(), location.line());
+            }
+            if let Some(s) = info.payload().downcast_ref::<&str>() {
+                let _ = writeln!(f, "  payload: {s}");
+            }
+            if let Some(s) = info.payload().downcast_ref::<String>() {
+                let _ = writeln!(f, "  payload: {s}");
+            }
+        }
+    }));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
@@ -32,7 +58,13 @@ pub fn run() {
         }))
         .manage(AuthState::default())
         .setup(|app| {
-            app.deep_link().register_all().unwrap();
+            // Register deep-link scheme. This can fail (e.g., if a second
+            // instance races or registry is locked), but it's non-fatal —
+            // the app should still open and work; deep links will be handled
+            // by the single-instance redirect or on_open_url.
+            if let Err(e) = app.deep_link().register_all() {
+                eprintln!("[setup] deep-link register_all failed (non-fatal): {e}");
+            }
 
             // Capture the AppHandle so the deep-link callback closure can
             // spawn an async task that accesses Tauri managed state + emits

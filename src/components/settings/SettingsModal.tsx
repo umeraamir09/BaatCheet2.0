@@ -10,12 +10,14 @@ import {
   isReservedKeybind,
 } from "../../lib/keybinds";
 import type { UpdateStatus } from "../../lib/updater";
+import type { VoiceShortcutStatus } from "../../hooks/useVoiceKeybinds";
 import { IconButton } from "../ui/IconButton";
 
 interface SettingsModalProps {
   open: boolean;
   keybinds: KeybindPreferences;
   updateStatus: UpdateStatus;
+  shortcutStatus: VoiceShortcutStatus;
   onClose: () => void;
   onSetBinding: (action: KeybindAction, binding: Keybind | null) => void;
   onSetEnabled: (action: KeybindAction, enabled: boolean) => void;
@@ -39,6 +41,7 @@ export function SettingsModal({
   open,
   keybinds,
   updateStatus,
+  shortcutStatus,
   onClose,
   onSetBinding,
   onSetEnabled,
@@ -120,6 +123,15 @@ export function SettingsModal({
               <p className="text-sm text-discord-muted">
                 Global shortcuts for the active 1:1 or group voice session, even when BaatCheet is
                 in the background.
+              </p>
+              <p
+                className={`mt-1 text-xs ${
+                  shortcutStatus.state === "active"
+                    ? "text-discord-success"
+                    : "text-discord-warning"
+                }`}
+              >
+                {shortcutStatus.message}
               </p>
             </div>
             <button

@@ -78,3 +78,12 @@ High-level implementation order, broken into small, independently-reviewable pha
 - Measure idle CPU/RAM **with a game running**; voice under load must not stutter or spike CPU.
 - Tauri updater wired so patches ship without manual redownload.
 - **DoD:** idle footprint measured and recorded; no audio stutter under gaming load; updater pushes a test patch successfully.
+
+## Phase 8 — Post-production 0.1.0 fixes
+**Goal:** remove the release-blocking defects found after the 0.1.0 feature pass and make the core auth, voice, window, messaging, and 1:1 call flows dependable for daily use.
+- Restore the Discord session from the OS keychain on every app reopen; transient startup/network failures must not behave like logout or erase a recoverable session.
+- Make configurable mute/deafen shortcuts true native global shortcuts that remain reliable while BaatCheet is unfocused, minimized, or behind a game.
+- Open the desktop window at a roomier default size with a practical minimum size for the final three-pane UI.
+- Add author-only hard deletion, author-only text editing for 15 minutes (including Up Arrow to edit the newest eligible sent message), an `edited` tag, and Discord-style emoji reactions in DMs and the lobby.
+- Replace the blocking full-screen 1:1 call overlay with a compact call view embedded in the matching DM by default, plus a local full-screen toggle; keep the call alive during navigation and show speaking rings plus mute/deafen indicators for both participants.
+- **DoD:** an installed build survives repeated close/reopen without re-login; mute/deafen shortcuts work repeatedly while the app is in the background; the larger default window opens correctly; two clients can edit/delete/react live with the locked rules; and an active 1:1 call no longer blocks messaging/navigation while compact/full-screen views and participant indicators remain accurate.
