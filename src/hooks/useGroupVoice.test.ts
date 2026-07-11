@@ -74,6 +74,7 @@ vi.mock("livekit-client", () => {
       TrackUnmuted: "trackUnmuted",
       ActiveSpeakersChanged: "activeSpeakersChanged",
       Disconnected: "disconnected",
+      Reconnected: "reconnected",
       AudioPlaybackStatusChanged: "audioPlaybackChanged",
     },
   };
@@ -268,6 +269,39 @@ describe("useGroupVoice", () => {
       });
 
       expect(mockPlayJoinSound).toHaveBeenCalled();
+    });
+  });
+
+  describe("roster recovery", () => {
+    it("rebuilds the complete participant roster after reconnecting", async () => {
+      const { result } = renderHook(() => useGroupVoice(mockUserId));
+
+      await act(async () => {
+        await result.current.join();
+      });
+
+      mockRoomInstance.remoteParticipants.set("user-2", {
+        identity: "user-2",
+        name: "User Two",
+        metadata: JSON.stringify({ avatarUrl: "", displayName: "User Two", username: "user2" }),
+        isMicrophoneEnabled: true,
+      });
+      mockRoomInstance.remoteParticipants.set("user-3", {
+        identity: "user-3",
+        name: "User Three",
+        metadata: JSON.stringify({ avatarUrl: "", displayName: "User Three", username: "user3" }),
+        isMicrophoneEnabled: true,
+      });
+
+      act(() => {
+        emitRoomEvent("reconnected");
+      });
+
+      expect(result.current.participants.map((participant) => participant.identity)).toEqual([
+        "user-1",
+        "user-2",
+        "user-3",
+      ]);
     });
   });
 
