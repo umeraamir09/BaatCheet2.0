@@ -66,6 +66,7 @@ export interface UseGroupVoiceResult {
 }
 
 const LEAVE_TIMEOUT_MS = 2_000;
+const VOICE_PRESENCE_HEARTBEAT_MS = 15_000;
 
 /** Parse participant metadata JSON (set in the token by mintToken). */
 function parseMetadata(metadata: string | undefined): {
@@ -103,6 +104,17 @@ export function useGroupVoice(myUserId: Id<"users"> | null): UseGroupVoiceResult
   const mintTokenAction = useAction(api.livekit.mintToken);
   const announceJoin = useMutation(api.voicePresence.join);
   const announceLeave = useMutation(api.voicePresence.leave);
+
+  // The server removes voice entries after 45 seconds without an update. Keep
+  // the lobby roster alive for the entire LiveKit session, including in DMs.
+  useEffect(() => {
+    if (status !== "connected" || !myUserId) return;
+
+    const heartbeat = () => void announceJoin({ userId: myUserId });
+    heartbeat();
+    const interval = window.setInterval(heartbeat, VOICE_PRESENCE_HEARTBEAT_MS);
+    return () => window.clearInterval(interval);
+  }, [announceJoin, myUserId, status]);
 
   // Keep statusRef in sync.
   useEffect(() => {
@@ -190,6 +202,11 @@ export function useGroupVoice(myUserId: Id<"users"> | null): UseGroupVoiceResult
           const ids = new Set(speakers.map((s) => s.identity));
           setSpeakingIds(ids);
           refreshParticipants(room, ids);
+        })
+        .on(RoomEvent.Reconnected, () => {
+          // The participant map may have been rebuilt during reconnect. Take a
+          // complete snapshot rather than relying on missed incremental events.
+          refreshParticipants(room, speakingIds);
         })
         .on(RoomEvent.Disconnected, () => {
           console.log(`${LOG_PREFIX} Disconnected from room`);
@@ -328,7 +345,6 @@ export function useGroupVoice(myUserId: Id<"users"> | null): UseGroupVoiceResult
       playJoinSound();
 
       setStatus("connected");
-      await announceJoin({ userId: myUserId });
     } catch (e) {
       console.error(`${LOG_PREFIX} join failed:`, e);
       setError(e instanceof Error ? e.message : "Failed to join voice");
@@ -339,7 +355,6 @@ export function useGroupVoice(myUserId: Id<"users"> | null): UseGroupVoiceResult
     myUserId,
     status,
     mintTokenAction,
-    announceJoin,
     registerEvents,
     refreshParticipants,
     speakingIds,

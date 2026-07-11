@@ -79,8 +79,11 @@ export function PresenceSidebar({
   onSelectPeer,
   onSelectDM,
 }: PresenceSidebarProps) {
+  const { audioContainerRef } = groupVoice;
   const presenceList = useQuery(api.presence.listPresence, {}) ?? [];
-  const voiceMembers = useQuery(api.voicePresence.list, viewMode === "lobby" ? {} : "skip") ?? [];
+  // Preserve this subscription while DMs are open, avoiding a partial roster
+  // while Convex establishes a new query after switching back to the lobby.
+  const voiceMembers = useQuery(api.voicePresence.list, {}) ?? [];
   const myDMs =
     useQuery(api.conversations.listMyDMs, presence.userId ? { userId: presence.userId } : "skip") ??
     [];
@@ -90,6 +93,7 @@ export function PresenceSidebar({
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-discord-border bg-discord-sidebar">
+      <div ref={audioContainerRef} className="hidden" aria-hidden="true" />
       <div className="border-b border-discord-border px-4 py-3">
         <h2 className="text-sm font-semibold text-discord-text">{viewMode === "lobby" ? "Hangout Lobby" : "Direct Messages"}</h2>
         <p className="mt-0.5 text-xs text-discord-muted">{viewMode === "lobby" ? "Shared space" : "Friends and conversations"}</p>
